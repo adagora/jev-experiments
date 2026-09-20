@@ -1,0 +1,21 @@
+.env
+.env.*
+.DS_Store
+node_modules/
+dist/
+.devin/
+*.tsbuildinfo
+
+# Never commit corpus data. These are exports of a production TMS: source
+# strings, every translation, developer notes and translator identities.
+*.xlsx
+*.xlsm
+*.csv
+*.tsv
+*.xliff
+*.xlf
+*.tbx
+*.run.json
+*.glossary.json
+*.decisions.json
+corpus*.ndjson

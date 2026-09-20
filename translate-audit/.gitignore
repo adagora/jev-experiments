@@ -1,0 +1,12 @@
+node_modules/
+out/
+web-dist/
+*.tsbuildinfo
+
+# Pipeline artifacts. Every one of these embeds the whole corpus.
+*.xlsx
+*.csv
+*.run.json
+*.glossary.json
+*.decisions.json
+apply*.js
