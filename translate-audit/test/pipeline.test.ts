@@ -144,7 +144,7 @@ describe("compose", () => {
     const de = f.find((x) => x.lang === "de")!;
     expect(de.severity).toBe(3);
     expect(de.action).toBe("needs human");
-    expect(de.reasons.some((r) => r.startsWith("meaning not preserved"))).toBe(true);
+    expect(de.reasons.map((r) => r.rule)).toContain("meaning-not-preserved");
   });
 
   it("files a completeness gap apart from a terminology one", () => {
@@ -165,12 +165,12 @@ describe("compose", () => {
 
   it("keeps the exact placeholder defect regardless of the judgment", () => {
     const f = compose({ corpus: c, lintIssues: lint.issues, judgments: judge(0.99), glossary: [], registerNorms: new Map() });
-    expect(f[0].reasons.some((r) => r.startsWith("placeholder-mismatch"))).toBe(true);
+    expect(f[0].reasons).toContainEqual({ rule: "lint", code: "placeholder-mismatch", detail: expect.any(String) });
   });
 
   it("suppresses semantic findings on strings that are not user-facing", () => {
     const f = compose({ corpus: c, lintIssues: lint.issues, judgments: judge(0.02, 0.01), glossary: [], registerNorms: new Map() });
-    expect(f[0].reasons.some((r) => r.startsWith("meaning not preserved"))).toBe(false);
+    expect(f[0].reasons.map((r) => r.rule)).not.toContain("meaning-not-preserved");
   });
 
   it("ignores a string that addresses nobody when measuring formality drift", () => {
@@ -215,7 +215,6 @@ const POLICY_FOR_TEST = {
   registerMinDominance: 0.8,
   registerMinConfidence: 0.6,
   canonicalConfidence: 0.6,
-  autoFixMaxSeverity: 2,
 };
 
 describe("substitutions", () => {
@@ -246,12 +245,13 @@ describe("substitutions", () => {
     source: "Usuń",
     current,
     suggested: null,
-    reasons: ["does not use the canonical term"],
+    reasons: [{ rule: "canonical-not-used" as const, p: 0.2, threshold: 0.4, terms: [] }],
     category: "consistency" as const,
     severity: 1,
     action: "auto-fix" as const,
     confidence: 0.8,
     substitutionOk: null,
+    judged: true,
   });
 
   it("proposes an edit only when a losing rendering is literally present", () => {

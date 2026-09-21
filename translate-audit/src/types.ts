@@ -1,3 +1,5 @@
+import type { Reason } from "./policy/rules.ts";
+
 export type Lang = string;
 
 export type Entry = {
@@ -57,10 +59,15 @@ export type GlossaryEntry = {
   lang: Lang;
   canonical: string | null;
   confidence: number;
-  interchangeable: number;
-  doNotTranslate: number;
-  covered: number;
-  severity: number;
+  /**
+   * `null` means not known. It used to be `NaN`, which JSON cannot carry and which
+   * `Number.isNaN(null)` reads as a number — a conversion at every persistence boundary
+   * and one real bug. There is nothing to convert now.
+   */
+  interchangeable: number | null;
+  doNotTranslate: number | null;
+  covered: number | null;
+  severity: number | null;
   variants: Variant[];
   entryIds: string[];
   origin: TermConflict["origin"] | "spacing-or-case";
@@ -83,17 +90,20 @@ export type Finding = {
   source: string;
   current: string;
   suggested: string | null;
-  reasons: string[];
+  reasons: Reason[];
   category: Category;
   severity: number;
   action: Action;
   confidence: number;
   substitutionOk: number | null;
+  /** False when the audit was attempted for this key and did not come back. */
+  judged: boolean;
 };
 
 export type EntryJudgment = {
   entryId: string;
-  isUiString: number;
+  /** `null` when the request came back without it. */
+  isUiString: number | null;
   meaning: Record<Lang, number>;
   adheres: Record<Lang, number>;
   register: Record<Lang, { form: "formal" | "informal" | "none"; confidence: number }>;
@@ -102,12 +112,37 @@ export type EntryJudgment = {
 
 export type StageStats = {
   name: string;
+  /** Units this stage tried. `requests - errors` is how many came back. */
   requests: number;
   judgments: number;
   errors: number;
+  /** Units deliberately not attempted — no translation to judge, or filtered out. */
+  skipped: number;
+  /** Units answered from evidence already on disk. Attempted, answered, and free. */
+  reused: number;
   retries: number;
   wallMs: number;
   latencies: number[];
   inputTokens: number;
   outputTokens: number;
+};
+
+/** A unit the model was asked about and did not answer for. */
+export type Unjudged = {
+  stage: string;
+  entryId: string;
+  error: string;
+  status: number;
+};
+
+/**
+ * What a stage actually saw. A summary that does not state this is a claim about a
+ * population it did not measure: a failed request leaves its key unjudged, and an
+ * unjudged key produces only lint findings — which looks exactly like a key that passed.
+ */
+export type Coverage = {
+  attempted: number;
+  answered: number;
+  failed: number;
+  skipped: number;
 };

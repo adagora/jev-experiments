@@ -7,7 +7,7 @@ import { changes, type DecisionRecord } from "../src/review/decisions.ts";
 import { orderStats, type OrderProbe } from "../src/calibrate.ts";
 import { scopeStats, type ScopeProbe } from "../src/commands/probe.ts";
 import { loadCache, saveCache } from "../src/cache.ts";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -196,7 +196,7 @@ describe("compose is unaffected by index vs scan", () => {
   ];
   const corpus: Corpus = { sourceLang: "pl", langs: ["pl", "de"], entries, origin: "t" };
   const glossary: GlossaryEntry[] = [
-    { term: "adres", lang: "de", canonical: "Adresse", confidence: 0.9, interchangeable: NaN, doNotTranslate: 0, covered: 0.9, severity: 1, variants: [], entryIds: [], origin: "duplicate-source" },
+    { term: "adres", lang: "de", canonical: "Adresse", confidence: 0.9, interchangeable: null, doNotTranslate: 0, covered: 0.9, severity: 1, variants: [], entryIds: [], origin: "duplicate-source" },
   ];
 
   it("selects the boundary-respecting entry only", () => {
@@ -205,13 +205,18 @@ describe("compose is unaffected by index vs scan", () => {
   });
 });
 
-describe("the cache repairs NaN on the way back in", () => {
+/**
+ * Unknown used to be `NaN`, which JSON cannot carry, so every persistence boundary
+ * converted it by hand — and `Number.isNaN(null)` is `false`, which cost one real bug.
+ * It is `null` now, and the test that has to pass is that nothing converts anything.
+ */
+describe("unknown survives the cache unchanged", () => {
   const dir = mkdtempSync(join(tmpdir(), "ta-cache-"));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
   const path = join(dir, "run.json");
 
-  it("brings unknown numbers back as NaN, not null", () => {
+  it("brings unknown numbers back as null, because that is what was written", () => {
     saveCache(path, {
       corpus: { sourceLang: "pl", langs: ["pl", "de"], entries: [], origin: "t" },
       lintIssues: [],
@@ -221,27 +226,37 @@ describe("the cache repairs NaN on the way back in", () => {
           lang: "de",
           canonical: null,
           confidence: 0,
-          interchangeable: NaN,
-          doNotTranslate: NaN,
-          covered: NaN,
-          severity: NaN,
+          interchangeable: null,
+          doNotTranslate: null,
+          covered: null,
+          severity: null,
           variants: [],
           entryIds: [],
           origin: "duplicate-source",
         },
       ],
-      judgments: [["k", { entryId: "k", isUiString: NaN, meaning: {}, adheres: {}, register: {}, ms: 1 }]],
+      judgments: [["k", { entryId: "k", isUiString: null, meaning: {}, adheres: {}, register: {}, ms: 1 }]],
       registerNorms: [],
       stages: [],
-      substitutions: [{ entryId: "k", lang: "de", suggested: "x", check: NaN, note: "" }],
+      substitutions: [{ entryId: "k", lang: "de", suggested: "x", check: null, note: null }],
     });
 
     const back = loadCache(path);
-    expect(Number.isNaN(back.glossary[0].severity)).toBe(true);
-    expect(Number.isNaN(back.glossary[0].covered)).toBe(true);
-    expect(Number.isNaN(back.glossary[0].doNotTranslate)).toBe(true);
-    expect(Number.isNaN(back.judgments[0][1].isUiString)).toBe(true);
-    expect(Number.isNaN(back.substitutions[0].check)).toBe(true);
+    expect(back.glossary[0].severity).toBeNull();
+    expect(back.glossary[0].covered).toBeNull();
+    expect(back.glossary[0].doNotTranslate).toBeNull();
+    expect(back.glossary[0].interchangeable).toBeNull();
+    expect(back.judgments[0][1].isUiString).toBeNull();
+    expect(back.substitutions[0].check).toBeNull();
+  });
+
+  it("writes them as null on disk too, so the file says what it means", () => {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as {
+      glossary: { severity: unknown }[];
+      judgments: [string, { isUiString: unknown }][];
+    };
+    expect(raw.glossary[0].severity).toBeNull();
+    expect(raw.judgments[0][1].isUiString).toBeNull();
   });
 
   it("leaves real numbers alone", () => {

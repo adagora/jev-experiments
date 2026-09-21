@@ -1,10 +1,9 @@
-import type { Finding, GlossaryEntry, Lang, StageStats } from "./types.ts";
+import type { Finding, GlossaryEntry, Lang, StageStats, Unjudged } from "./types.ts";
 import { asNoul, type JevClient, type JevRequest } from "./jev/client.ts";
 import { substitutionQuestions, type SubstitutionState } from "./jev/questions.ts";
 import { containsTerm, fold, replaceTerm } from "./util/text.ts";
-import { POLICY, type Policy } from "./compose.ts";
-
-export const SUBSTITUTION_GATES = { grammatical: 0.7, preserved: 0.8, improved: 0.6 };
+import { DEFAULT_GATES, DEFAULT_POLICY, type Policy, type SubstitutionGates } from "./config/profile.ts";
+import type { Reason } from "./policy/rules.ts";
 
 export type Proposal = {
   finding: Finding;
@@ -17,12 +16,12 @@ export type Proposal = {
 export function proposeSubstitutions(
   findings: Finding[],
   glossary: GlossaryEntry[],
-  policy: Policy = POLICY,
+  policy: Policy = DEFAULT_POLICY,
 ): Proposal[] {
   const byLang = new Map<Lang, GlossaryEntry[]>();
   for (const g of glossary) {
     if (!g.canonical || g.confidence < policy.canonicalConfidence) continue;
-    if (!Number.isNaN(g.doNotTranslate) && g.doNotTranslate >= 0.5) continue;
+    if (g.doNotTranslate !== null && g.doNotTranslate >= 0.5) continue;
     const list = byLang.get(g.lang);
     if (list) list.push(g);
     else byLang.set(g.lang, [g]);
@@ -53,16 +52,18 @@ export function proposeSubstitutions(
   return out;
 }
 
-export type SubstituteResult = { applied: number; rejected: number; stats: StageStats };
+export type SubstituteResult = { applied: number; rejected: number; stats: StageStats; unjudged: Unjudged[] };
 
 export async function verifySubstitutions(
   client: JevClient,
   proposals: Proposal[],
   sourceLangName: string,
   onProgress?: (done: number, total: number) => void,
+  gates: SubstitutionGates = DEFAULT_GATES,
 ): Promise<SubstituteResult> {
   const requests: JevRequest<Proposal>[] = proposals.map((p) => ({
     tag: p,
+    unit: `fix:${p.finding.entryId}/${p.finding.lang}`,
     state: {
       target_language: p.finding.lang,
       source_language: sourceLangName,
@@ -77,15 +78,17 @@ export async function verifySubstitutions(
 
   let applied = 0;
   let rejected = 0;
+  const unjudged: Unjudged[] = [];
   const stats = await client.run(
     "substitute",
     requests,
     (r) => {
       const p = r.tag;
       if ("error" in r) {
+        unjudged.push({ stage: "substitute", entryId: p.finding.entryId, error: r.error, status: r.status });
         p.finding.action = "needs human";
         p.finding.suggested = p.after;
-        p.finding.reasons.push(`substitution proposed ("${p.from}" → "${p.to}") but could not be verified`);
+        p.finding.reasons.push({ rule: "substitution-unverified", from: p.from, to: p.to });
         rejected++;
         return;
       }
@@ -96,30 +99,25 @@ export async function verifySubstitutions(
       p.finding.substitutionOk = Math.min(grammatical, preserved, improved);
 
       const ok =
-        grammatical >= SUBSTITUTION_GATES.grammatical &&
-        preserved >= SUBSTITUTION_GATES.preserved &&
-        improved >= SUBSTITUTION_GATES.improved;
+        grammatical >= gates.grammatical &&
+        preserved >= gates.preserved &&
+        improved >= gates.improved;
+
+      const verdict: Reason = ok
+        ? { rule: "substitution-verified", from: p.from, to: p.to, grammatical, preserved, improved }
+        : { rule: "substitution-rejected", from: p.from, to: p.to, grammatical, preserved, improved, gates };
+      p.finding.reasons.push(verdict);
 
       if (ok) {
         p.finding.action = "auto-fix";
-        p.finding.reasons.push(
-          `substitution "${p.from}" → "${p.to}" verified (grammatical ${grammatical.toFixed(2)}, ` +
-            `meaning ${preserved.toFixed(2)}, better ${improved.toFixed(2)})`,
-        );
         applied++;
       } else {
         p.finding.action = "needs human";
-        const failed = [
-          grammatical < SUBSTITUTION_GATES.grammatical ? `grammar ${grammatical.toFixed(2)}` : null,
-          preserved < SUBSTITUTION_GATES.preserved ? `meaning ${preserved.toFixed(2)}` : null,
-          improved < SUBSTITUTION_GATES.improved ? `not an improvement ${improved.toFixed(2)}` : null,
-        ].filter(Boolean);
-        p.finding.reasons.push(`substitution "${p.from}" → "${p.to}" rejected (${failed.join(", ")})`);
         rejected++;
       }
     },
     onProgress,
   );
 
-  return { applied, rejected, stats };
+  return { applied, rejected, stats, unjudged };
 }

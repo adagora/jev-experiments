@@ -124,9 +124,9 @@ export function Glossary({ rows, total, loadMore, onChanged, langs, live, toast 
               <span className="mono">{row.lang}</span>
               <span>·</span>
               <span>{row.entryIds.length} keys affected</span>
-              {!Number.isNaN(row.severity) && <Meter label="damage if inconsistent" value={row.severity / 3} />}
+              {row.severity !== null && <Meter label="damage if inconsistent" value={row.severity / 3} />}
               {row.source === "code" && <span className="chip">resolved in code — spacing only</span>}
-              {Number.isFinite(row.covered) && row.covered < 0.5 && (
+              {row.covered !== null && row.covered < 0.5 && (
                 <span
                   className="chip off"
                   title="A Choice always has to point at something, so it reports which option won, not whether the winner is any good. This is the separate question that can say the list itself is wrong."
@@ -163,7 +163,7 @@ export function Glossary({ rows, total, loadMore, onChanged, langs, live, toast 
               </div>
             </div>
 
-            {Number.isFinite(row.covered) && row.covered < 0.5 && (
+            {row.covered !== null && row.covered < 0.5 && (
               <div className="pair">
                 <label />
                 <div className="dim" style={{ fontSize: 12 }}>
@@ -231,7 +231,7 @@ export function Glossary({ rows, total, loadMore, onChanged, langs, live, toast 
                     </span>
                   )}
                   <Meter label="confidence" value={opinion.confidence} />
-                  {!Number.isNaN(opinion.doNotTranslate) && <Meter label="is a brand name" value={opinion.doNotTranslate} />}
+                  {opinion.doNotTranslate !== null && <Meter label="is a brand name" value={opinion.doNotTranslate} />}
                   <span className="chip">{opinion.ms} ms</span>
                 </div>
               </div>

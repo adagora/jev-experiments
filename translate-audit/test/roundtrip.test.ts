@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
+import type { RuleId } from "../src/policy/rules.ts";
 import ExcelJS from "exceljs";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,14 +25,16 @@ const findings: Finding[] = [
   {
     entryId: "k1", project: "p", keyName: "usun", lang: "de",
     source: "Usuń", current: "Entfernen", suggested: "Löschen",
-    reasons: ['does not use the canonical term ("usun" → "Löschen")'],
-    category: "consistency", severity: 2, action: "auto-fix", confidence: 0.82, substitutionOk: 0.91,
+    reasons: [
+      { rule: "canonical-not-used" as const, p: 0.2, threshold: 0.4, terms: [{ term: "usun", canonical: "Löschen" }] },
+    ],
+    category: "consistency", severity: 2, action: "auto-fix", confidence: 0.82, substitutionOk: 0.91, judged: true,
   },
   {
     entryId: "k2", project: "p", keyName: "zapisz", lang: "uk",
     source: "Zapisz", current: "", suggested: null,
-    reasons: ["no translation"],
-    category: "completeness", severity: 2, action: "needs human", confidence: 1, substitutionOk: null,
+    reasons: [{ rule: "no-translation" as const }],
+    category: "completeness", severity: 2, action: "needs human", confidence: 1, substitutionOk: null, judged: true,
   },
 ];
 
@@ -49,8 +52,9 @@ const report = {
     byAction: [["auto-fix", 1], ["needs human", 1]] as ["auto-fix" | "needs human", number][],
     byCategory: [["consistency", 1], ["completeness", 1]] as ["consistency" | "completeness", number][],
     byReason: [["does not use the canonical term", 1], ["no translation", 1]] as [string, number][],
+    byRule: [["canonical-not-used", 1], ["no-translation", 1]] as [RuleId, number][],
   },
-  stages: [{ name: "audit", requests: 2, judgments: 6, errors: 0, retries: 0, wallMs: 100, latencies: [40, 60], inputTokens: 900, outputTokens: 60 }],
+  stages: [{ name: "audit", requests: 2, judgments: 6, errors: 0, skipped: 0, reused: 0, retries: 0, wallMs: 100, latencies: [40, 60], inputTokens: 900, outputTokens: 60 }],
   registerNorms: new Map([["de", { formalShare: 0.9, n: 80 }]]),
   pricing: { inputPerM: 0.4, outputPerM: 2 },
   startedAt: new Date("2026-09-20T10:00:00Z"),

@@ -15,6 +15,7 @@ export type ReviewRow = {
   current: string;
   suggested: string | null;
   reasons: string[];
+  rules: string[];
   category: Category;
   severity: number;
   action: Action;
@@ -35,9 +36,9 @@ export type GlossaryRow = {
   status: TermStatus;
   source: "jev" | "code" | "human";
   confidence: number;
-  severity: number;
-  doNotTranslate: number;
-  covered: number;
+  severity: number | null;
+  doNotTranslate: number | null;
+  covered: number | null;
   variants: Variant[];
   entryIds: string[];
   guidance: string;
@@ -123,7 +124,7 @@ export type TermOpinion = {
   contextDependent: boolean;
   confidence: number;
   probabilities: Record<string, number>;
-  doNotTranslate: number;
+  doNotTranslate: number | null;
   ms: number;
 };
 

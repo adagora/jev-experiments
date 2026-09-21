@@ -22,9 +22,9 @@ export type GlossaryRecord = {
   status: TermStatus;
   source: "jev" | "code" | "human";
   confidence: number;
-  severity: number;
-  doNotTranslate: number;
-  covered: number;
+  severity: number | null;
+  doNotTranslate: number | null;
+  covered: number | null;
   variants: Variant[];
   entryIds: string[];
   guidance: string;
@@ -34,22 +34,16 @@ export type GlossaryRecord = {
   firstSeen: string;
 };
 
+/** The record is already JSON-shaped, so the file is the record. */
 export type GlossaryFile = {
   version: number;
   updatedAt: string;
-  terms: (Omit<GlossaryRecord, "severity" | "doNotTranslate" | "covered"> & {
-    severity: number | null;
-    doNotTranslate: number | null;
-    covered: number | null;
-  })[];
+  terms: GlossaryRecord[];
 };
 
 export const GLOSSARY_VERSION = 1;
 
 export const termKey = (term: string, lang: Lang): string => `${term}\u0000${lang}`;
-
-const unknownToNull = (n: number): number | null => (Number.isNaN(n) ? null : n);
-const nullToUnknown = (n: number | null | undefined): number => (n === null || n === undefined ? NaN : n);
 
 export function loadGlossary(path: string): GlossaryRecord[] {
   if (!existsSync(path)) return [];
@@ -59,22 +53,17 @@ export function loadGlossary(path: string): GlossaryRecord[] {
   }
   return raw.terms.map((t) => ({
     ...t,
-    severity: nullToUnknown(t.severity),
-    doNotTranslate: nullToUnknown(t.doNotTranslate),
-    covered: nullToUnknown(t.covered),
+    severity: t.severity ?? null,
+    doNotTranslate: t.doNotTranslate ?? null,
+    covered: t.covered ?? null,
   }));
 }
 
 export function saveGlossary(path: string, terms: GlossaryRecord[]): void {
-  const payload = {
+  const payload: GlossaryFile = {
     version: GLOSSARY_VERSION,
     updatedAt: new Date().toISOString(),
-    terms: terms.map((t) => ({
-      ...t,
-      severity: unknownToNull(t.severity),
-      doNotTranslate: unknownToNull(t.doNotTranslate),
-      covered: unknownToNull(t.covered),
-    })),
+    terms,
   };
   writeFileSync(path, JSON.stringify(payload, null, 2), "utf8");
 }
@@ -129,9 +118,9 @@ export function mergeMined(
         status: "proposed",
         source: "jev",
         confidence: 0,
-        severity: NaN,
-        doNotTranslate: NaN,
-        covered: NaN,
+        severity: null,
+        doNotTranslate: null,
+        covered: null,
         variants: c.variants,
         entryIds: c.entryIds,
         guidance: "",
@@ -247,8 +236,8 @@ export function manualTerm(term: string, lang: Lang, canonical: string, who: str
     status: "approved",
     source: "human",
     confidence: 1,
-    severity: NaN,
-    doNotTranslate: NaN,
+    severity: null,
+    doNotTranslate: null,
     covered: 1,
     variants: [],
     entryIds: [],
@@ -268,7 +257,7 @@ export function enforceable(records: GlossaryRecord[]): GlossaryEntry[] {
       lang: r.lang,
       canonical: r.canonical,
       confidence: r.confidence,
-      interchangeable: NaN,
+      interchangeable: null,
       doNotTranslate: r.status === "do-not-translate" ? 1 : r.doNotTranslate,
       covered: r.covered,
       severity: r.severity,
@@ -284,7 +273,7 @@ export function asGlossaryEntries(records: GlossaryRecord[]): GlossaryEntry[] {
     lang: r.lang,
     canonical: r.canonical,
     confidence: r.confidence,
-    interchangeable: NaN,
+    interchangeable: null,
     doNotTranslate: r.status === "do-not-translate" ? 1 : r.doNotTranslate,
     covered: r.covered,
     severity: r.severity,

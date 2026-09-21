@@ -2,6 +2,9 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "../../server/index.ts";
+import { loadProfile, type Profile } from "../config/profile.ts";
+import { note, type Warning } from "../report/envelope.ts";
+import type { Session, SessionPaths } from "../../server/api.ts";
 
 export type ReviewArgs = {
   cache: string;
@@ -11,6 +14,13 @@ export type ReviewArgs = {
   apiKey?: string;
   concurrency?: number;
   open?: boolean;
+  profile?: Profile;
+};
+
+export type ReviewStarted = {
+  paths: SessionPaths;
+  stats: ReturnType<Session["stats"]>;
+  warnings: Warning[];
 };
 
 export function resolvePaths(args: ReviewArgs) {
@@ -28,36 +38,42 @@ export function findStaticDir(): string | undefined {
   return existsSync(join(dist, "index.html")) ? dist : undefined;
 }
 
-export async function runReview(args: ReviewArgs): Promise<void> {
+export async function runReview(args: ReviewArgs): Promise<ReviewStarted> {
   const paths = resolvePaths(args);
   if (!existsSync(paths.cache)) {
     throw new Error(`no such run: ${paths.cache} — produce one with "translate-audit run ... --save ${paths.cache}"`);
   }
 
   const staticDir = findStaticDir();
+  const profile = args.profile ?? loadProfile();
   const { server, session } = createServer({
     paths,
     port: args.port,
     staticDir,
     apiKey: args.apiKey,
     concurrency: args.concurrency,
+    profile,
   });
 
   const stats = session.stats();
   await new Promise<void>((res) => server.listen(args.port, res));
 
-  console.log(`\n  review server on http://localhost:${args.port}`);
-  console.log(`  ${paths.cache}`);
-  console.log(`  glossary  ${paths.glossary}${existsSync(paths.glossary) ? "" : "  (new)"}`);
-  console.log(`  decisions ${paths.decisions}${existsSync(paths.decisions) ? "" : "  (new)"}`);
-  console.log(
-    `\n  ${stats.summary.findings.toLocaleString()} findings · ` +
-      `${stats.glossary.total.toLocaleString()} glossary terms (${stats.glossary.decided} decided) · ` +
-      `${stats.decisions.total.toLocaleString()} decisions so far`,
-  );
-  if (!args.apiKey) console.log("\n  ! TYPESAFE_API_KEY is not set — live checks on edited text are disabled.");
-  if (!staticDir) {
-    console.log(`\n  ! No built UI at web-dist. Run "npm run build:web", or use "npm run review:dev" for hot reload.`);
+  const warnings: Warning[] = [];
+  if (!args.apiKey) {
+    warnings.push({ code: "no-api-key", detail: "TYPESAFE_API_KEY is not set — live checks on edited text are disabled" });
   }
-  console.log("");
+  if (!staticDir) {
+    warnings.push({
+      code: "no-built-ui",
+      detail: 'no built UI at web-dist. Run "npm run build:web", or use "npm run review:dev" for hot reload',
+    });
+  }
+
+  note(`\n  review server on http://localhost:${args.port}`);
+  note(`  ${paths.cache}`);
+  note(`  glossary  ${paths.glossary}${existsSync(paths.glossary) ? "" : "  (new)"}`);
+  note(`  decisions ${paths.decisions}${existsSync(paths.decisions) ? "" : "  (new)"}`);
+  for (const w of warnings) note(`  ! ${w.detail}`);
+
+  return { paths, stats, warnings };
 }

@@ -9,4 +9,6 @@ web-dist/
 *.run.json
 *.glossary.json
 *.decisions.json
+*.evidence.jsonl
+runs/
 apply*.js

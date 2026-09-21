@@ -4,9 +4,6 @@ import { JevClient, asChoice, asNoul, choice } from "../jev/client.ts";
 import { CONTEXT_DEPENDENT, arbitrationQuestions, arbitrationState, langName } from "../jev/questions.ts";
 import { orderStats, type OrderProbe } from "../calibrate.ts";
 
-export const DOMAIN =
-  "a B2B product configurator and order portal for building joinery (gates, doors, fences, windows)";
-
 function reversed(c: TermConflict): TermConflict {
   return { ...c, variants: [...c.variants].reverse() };
 }
@@ -16,6 +13,7 @@ export async function probeOrder(
   conflicts: TermConflict[],
   entries: Map<string, Entry>,
   sourceLang: string,
+  domain: string,
   onProgress?: (done: number, total: number) => void,
 ): Promise<{ probes: OrderProbe[]; ms: number }> {
   const t0 = performance.now();
@@ -24,7 +22,7 @@ export async function probeOrder(
 
   const ask = async (c: TermConflict) => {
     const { response } = await client.one(
-      arbitrationState(c, entries, sourceLang, DOMAIN),
+      arbitrationState(c, entries, sourceLang, domain),
       { canonical: arbitrationQuestions(c).canonical },
     );
     return asChoice(response.answers.canonical);
@@ -75,6 +73,7 @@ export type ScopeProbe = {
 export async function probeScope(
   client: JevClient,
   cases: { id: string; lang: string; term: string; keep: Variant[] }[],
+  domain: string,
   onProgress?: (done: number, total: number) => void,
 ): Promise<{ probes: ScopeProbe[]; ms: number }> {
   const t0 = performance.now();
@@ -95,7 +94,7 @@ export async function probeScope(
       try {
         const { response } = await client.one(
           {
-            domain: DOMAIN,
+            domain,
             source_language: "Polish",
             target_language: target,
             source_term: c.term,

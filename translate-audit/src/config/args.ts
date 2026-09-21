@@ -23,11 +23,6 @@ export function loadEnv(from = process.cwd()): void {
   }
 }
 
-export const PRICING = {
-  inputPerM: Number(process.env.JEV_PRICE_IN ?? 0.4),
-  outputPerM: Number(process.env.JEV_PRICE_OUT ?? 2.0),
-};
-
 export type Args = {
   command: string;
   flags: Map<string, string>;
@@ -67,7 +62,15 @@ export const flagNum = (args: Args, name: string, fallback: number): number => {
   return Number.isFinite(n) ? n : fallback;
 };
 
+/**
+ * `--fix` / `--fix false` / `--no-fix`.
+ *
+ * The `--no-` form is the one people actually type, and it used to be parsed into a flag
+ * called `no-fix` that nothing ever read — so `--no-fix`, documented as a way to skip the
+ * substitution stage, silently spent the requests anyway.
+ */
 export const flagBool = (args: Args, name: string, fallback: boolean): boolean => {
+  if (args.flags.has(`no-${name}`)) return false;
   const v = args.flags.get(name);
   if (v === undefined) return fallback;
   return v !== "false" && v !== "0";

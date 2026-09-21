@@ -327,6 +327,41 @@ conflicts in the same queue:
 `integrity` (placeholders, markup — the product renders wrong) · `meaning` · `consistency`
 · `completeness` · `style`.
 
+## Look before you spend
+
+Every command is either an observation or an action. Observations are free, write nothing and
+are safe at any time; actions declare what they will spend first. So the only way to find out
+what something costs is never to pay for it:
+
+```sh
+translate-audit status                  # what is in this directory, and whether it agrees
+translate-audit plan --mongo <your-db>  # what a run would ask, and what it would cost
+#   requests to make  8894
+#   already bought       0
+#   estimated cost   $11.62
+```
+
+`plan` prices only the requests the evidence store does not already hold — because a judgment
+is addressed by `(model, state, questions)`, not by when it was made. An identical re-run
+therefore makes no requests at all, an interrupted run resumes by itself, and changing one
+question's wording re-asks only the keys that ask it. Iterating on a question costs the delta
+rather than $11.89.
+
+And when a row looks wrong, the derivation is addressable:
+
+```sh
+translate-audit explain audit.run.json <entry-id> de
+#   meaning-not-preserved   meaning p=0.01   < meaningBad 0.35   severity 3, needs human
+#   canonical-not-used      adheres p=0.02   < adherenceBad 0.4  severity 1–2, auto-fix
+#
+#   what would change the answer
+#     meaningBad <= 0.01 would make this "meaning uncertain" instead
+```
+
+Every command prints one result on stdout and its narration on stderr, so
+`translate-audit <command> --json` gives a single JSON object — and the human text above is
+rendered *from* that object, so the two cannot drift.
+
 ## Run it
 
 ```sh
@@ -352,7 +387,7 @@ cheaper and blinder — the best finds above had no exact defect at all. `--no-f
 substitution. `--concurrency` defaults to 12 lanes.
 
 ```sh
-npm test        # 54 tests: text facts, mining, policy, substitution gates, xlsx round-trip
+npm test        # 210 tests: text facts, mining, policy, substitution gates, xlsx round-trip, the glossary's memory
 npm run lint
 npm run typecheck
 ```
@@ -373,23 +408,58 @@ translation audit exists to protect. Where a previous export already flattened l
 
 **Synthetic** — a corpus with deliberately injected, recorded defects, for `score`.
 
-## Layout
+## How it is put together
+
+Seven levels, each a pure function of the ones below it. Only level 3 costs money or can
+fail; only level 4 holds an opinion; only level 5 is written by a human. Imports run one way.
+
+| # | Level | Cost |
+|---|---|---|
+| 0 | text facts — folding, placeholders, tags, case, word boundaries | free |
+| 1 | corpus — keys × languages. The **cell** is the unit of everything above | free |
+| 2 | proven evidence — exact defects and contested terms, established by counting | free |
+| 3 | judged evidence — what Jev answered | **$** |
+| 4 | policy — evidence + thresholds → findings. No inference, no I/O | free |
+| 5 | decisions — glossary terms and row verdicts, written by people | — |
+| 6 | projections — workbook, re-import, review app | free |
+
+One edge runs back up the tower, and it is the point of the system: a decided term, and the
+rule a translator wrote in their own words, become state on the next audit. That is how
+*"Tor when it is a gate in a fence; Tür when it is a garage door"* reaches thousands of keys
+nobody has opened.
 
 ```
-src/lint.ts          exact defects: placeholders, markup, casing, punctuation, copies
-src/glossary/store.ts the glossary as a living thing — statuses, merging, what is enforceable
+src/config/profile.ts   the only configuration: domain, thresholds, gates, model, prices
+src/lint.ts             exact defects: placeholders, markup, casing, punctuation, copies
+src/mine.ts             the glossary nobody wrote — grouping, conflicts, spacing-only auto-resolve
+src/jev/questions.ts    every question asked, the rules about what is never asked, and the
+                        fingerprint that changes when any of it changes
+src/jev/client.ts       the only module that talks to TypeSafe; pool, retry, measurement
+src/evidence/store.ts   judgments addressed by (model, state, questions). Resume and replay
+src/arbitrate.ts        contested terms → glossary
+src/audit.ts            one request per key, fanned out over every language
+src/policy/rules.ts     why a finding was raised, as data. English is rendered from it
+src/compose.ts          policy: raw judgments → reviewable findings. No inference.
+src/substitute.ts       code performs the edit; Jev judges the result
+src/glossary/store.ts   the glossary as a living thing — statuses, merging, what is enforceable
 src/review/decisions.ts what translators decided, and who decided it
-server/api.ts        the review session: reads, writes, live checks
-server/index.ts      http: the API and the built UI, with the key on this side
-web/src/             the translators' app — review queue, glossary curation, summary
-src/mine.ts          the glossary nobody wrote — grouping, conflicts, spacing-only auto-resolve
-src/jev/questions.ts every question asked, and the two rules about what is never asked
-src/jev/client.ts    the only module that talks to TypeSafe; pool, retry, measurement
-src/arbitrate.ts     contested terms → glossary
-src/audit.ts         one request per key, fanned out over every language
-src/compose.ts       policy: raw judgments → reviewable findings. No inference.
-src/substitute.ts    code performs the edit; Jev judges the result
-src/cache.ts         every answer, on disk, so re-rendering is free
-src/report/xlsx.ts   the six sheets, and reading the Decision column back
-src/sources/         mongo · csv · synthetic
+src/review/casebook.ts  those decisions as labelled cases — the eval set the tool writes itself
+src/ledger/ledger.ts    what every run and measurement produced, kept
+src/commands/observe.ts status · plan · inspect · explain · diff — free, and none of them write
+src/report/envelope.ts  the one result shape, and the human text rendered from it
+src/report/xlsx.ts      the six sheets, and reading the Decision column back
+src/cache.ts            the run snapshot, so re-rendering is free
+src/sources/            mongo · csv · synthetic
+server/api.ts           the review session: reads, writes, live checks
+server/index.ts         http: the API and the built UI, with the key on this side
+web/src/                the translators' app — review queue, glossary curation, summary
 ```
+
+## The documents
+
+| | |
+|---|---|
+| [AGENTS.md](AGENTS.md) | driving it: what is free, what a run costs, how to read a finished run without spending, and the edges that return a well-formed wrong answer |
+| [DESIGN.md](DESIGN.md) | the system: the tower, the seven laws, fingerprinted evidence, and what accretes with use |
+| [PLAN.md](PLAN.md) | the staged path from this tree to that design |
+| [TESTING.md](TESTING.md) | seven layers of verification, cheapest first |

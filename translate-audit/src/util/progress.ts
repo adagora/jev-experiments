@@ -1,8 +1,12 @@
+/**
+ * Narration while a stage runs. It writes to stderr, never stdout — stdout carries the
+ * command's envelope and has to stay parseable.
+ */
 export class Progress {
   private label: string;
   private last = 0;
   private started = Date.now();
-  private tty = process.stdout.isTTY === true;
+  private tty = process.stderr.isTTY === true;
 
   constructor(label: string) {
     this.label = label;
@@ -19,12 +23,12 @@ export class Progress {
     const line =
       `  ${this.label.padEnd(12)} ${bar(pct)} ${String(done).padStart(String(total).length)}/${total}` +
       `  ${rate.toFixed(1)}/s  ${elapsed.toFixed(0)}s${done < total ? ` · eta ${eta.toFixed(0)}s` : ""}`;
-    if (this.tty) process.stdout.write(`\r${line.padEnd(92)}`);
-    else if (done === total) process.stdout.write(`${line}\n`);
+    if (this.tty) process.stderr.write(`\r${line.padEnd(92)}`);
+    else if (done === total) process.stderr.write(`${line}\n`);
   }
 
   done(): void {
-    if (this.tty) process.stdout.write("\n");
+    if (this.tty) process.stderr.write("\n");
   }
 }
 

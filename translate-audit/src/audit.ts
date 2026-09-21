@@ -1,4 +1,4 @@
-import type { Corpus, Entry, EntryJudgment, GlossaryEntry, Lang, LintIssue, StageStats } from "./types.ts";
+import type { Corpus, Entry, EntryJudgment, GlossaryEntry, Lang, LintIssue, StageStats, Unjudged } from "./types.ts";
 import { asChoice, asNoul, type JevClient, type JevRequest } from "./jev/client.ts";
 import {
   REGISTER_FORMAL,
@@ -17,16 +17,28 @@ export type AuditOptions = {
   guidance?: Map<string, { lang: Lang; guidance: string }[]>;
 };
 
-export type AuditResult = { judgments: Map<string, EntryJudgment>; stats: StageStats; planned: number };
+export type AuditResult = {
+  judgments: Map<string, EntryJudgment>;
+  stats: StageStats;
+  planned: number;
+  /** Keys the audit asked about and did not get an answer for. */
+  unjudged: Unjudged[];
+};
 
-export async function audit(
-  client: JevClient,
+export type AuditRequest = JevRequest<{ entry: Entry; plan: AuditPlan }>;
+
+/**
+ * Exactly the requests `audit` would send, without sending them.
+ *
+ * `plan` fingerprints these against the evidence store to say what a run would cost
+ * before it costs it — which is what turns an irreversible spend into a proposal.
+ */
+export function auditRequests(
   corpus: Corpus,
   glossary: GlossaryEntry[],
   lintIssues: LintIssue[],
   opts: AuditOptions,
-  onProgress?: (done: number, total: number) => void,
-): Promise<AuditResult> {
+): { requests: AuditRequest[]; considered: number } {
   const targets = corpus.langs.filter((l) => l !== corpus.sourceLang);
 
   const lintByEntry = new Map<string, Map<Lang, string[]>>();
@@ -50,7 +62,7 @@ export async function audit(
 
   const entries = opts.only ? corpus.entries.filter((e) => opts.only!.has(e.id)) : corpus.entries;
 
-  const requests: JevRequest<{ entry: Entry; plan: AuditPlan }>[] = [];
+  const requests: AuditRequest[] = [];
   for (const entry of entries) {
     const folded = fold(entry.source);
     const applicable: GlossaryEntry[] = [];
@@ -71,6 +83,7 @@ export async function audit(
 
     requests.push({
       tag: { entry, plan },
+      unit: `key:${entry.id}`,
       state: auditState(
         entry,
         corpus.langs,
@@ -83,16 +96,34 @@ export async function audit(
     });
   }
 
+  return { requests, considered: entries.length };
+}
+
+export async function audit(
+  client: JevClient,
+  corpus: Corpus,
+  glossary: GlossaryEntry[],
+  lintIssues: LintIssue[],
+  opts: AuditOptions,
+  onProgress?: (done: number, total: number) => void,
+): Promise<AuditResult> {
+  const { requests, considered } = auditRequests(corpus, glossary, lintIssues, opts);
+
   const judgments = new Map<string, EntryJudgment>();
+  const unjudged: Unjudged[] = [];
   const stats = await client.run(
     "audit",
     requests,
     (r) => {
       const { entry, plan } = r.tag;
-      if ("error" in r) return;
+      if ("error" in r) {
+        // Recorded rather than dropped: an unjudged key must not read as a clean one.
+        unjudged.push({ stage: "audit", entryId: entry.id, error: r.error, status: r.status });
+        return;
+      }
       const j: EntryJudgment = {
         entryId: entry.id,
-        isUiString: asNoul(r.answers.uiString) ?? NaN,
+        isUiString: asNoul(r.answers.uiString) ?? null,
         meaning: {},
         adheres: {},
         register: {},
@@ -117,7 +148,8 @@ export async function audit(
     onProgress,
   );
 
-  return { judgments, stats, planned: requests.length };
+  stats.skipped = considered - requests.length;
+  return { judgments, stats, planned: requests.length, unjudged };
 }
 
 export function registerNorm(judgments: Map<string, EntryJudgment>, langs: Lang[]): Map<Lang, { formalShare: number; n: number }> {

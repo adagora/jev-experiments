@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize as normalizePath, resolve } from "node:path";
 import { Session, type SessionPaths } from "./api.ts";
 import { JevClient } from "../src/jev/client.ts";
+import { loadProfile, type Profile } from "../src/config/profile.ts";
 import type { Verdict } from "../src/review/decisions.ts";
 
 const MIME: Record<string, string> = {
@@ -21,13 +22,22 @@ export type ServeOptions = {
   staticDir?: string;
   apiKey?: string;
   concurrency?: number;
+  profile?: Profile;
 };
 
 const csvCell = (s: string): string => (/[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
 
 export function createServer(opts: ServeOptions): { server: http.Server; session: Session } {
-  const client = opts.apiKey ? new JevClient({ apiKey: opts.apiKey, concurrency: opts.concurrency ?? 6 }) : null;
-  const session = new Session(opts.paths, client);
+  const profile = opts.profile ?? loadProfile();
+  const client = opts.apiKey
+    ? new JevClient({
+        apiKey: opts.apiKey,
+        concurrency: opts.concurrency ?? 6,
+        model: profile.model,
+        baseUrl: profile.baseUrl,
+      })
+    : null;
+  const session = new Session(opts.paths, client, profile);
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);

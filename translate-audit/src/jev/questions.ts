@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Entry, GlossaryEntry, Lang, TermConflict } from "../types.ts";
 import { choice, noul, score, type Question } from "./client.ts";
 import { norm } from "../util/text.ts";
@@ -258,4 +259,33 @@ export function substitutionQuestions(lang: Lang): Record<string, Question> {
       `Is \`after\` a better translation of \`source\` than \`before\` is, for a product that uses \`canonical_term\` as its standard term?`,
     ),
   };
+}
+
+/**
+ * A short hash of every question this build asks, over a fixed fixture.
+ *
+ * It changes when any question's wording, options or criteria change, and not otherwise —
+ * so a saved run can say which questions produced it. The run in this repository holds
+ * five arbitration judgments per request where this build asks six, and nothing in the
+ * file said so.
+ */
+export function questionsFingerprint(): string {
+  const conflict: TermConflict = {
+    term: "term",
+    lang: "de",
+    variants: [
+      { text: "A", count: 2, examples: [] },
+      { text: "B", count: 1, examples: [] },
+    ],
+    entryIds: [],
+    origin: "duplicate-source",
+    trivial: false,
+  };
+  const plan: AuditPlan = { meaning: ["de"], adherence: ["de"], register: ["de"] };
+  const payload = JSON.stringify([
+    arbitrationQuestions(conflict),
+    auditQuestions(plan, "pl"),
+    substitutionQuestions("de"),
+  ]);
+  return createHash("sha256").update(payload).digest("hex").slice(0, 12);
 }

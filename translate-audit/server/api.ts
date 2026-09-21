@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import type { Corpus, Entry, EntryJudgment, Finding, GlossaryEntry, Lang } from "../src/types.ts";
-import { POLICY, compose, summarise, type Policy } from "../src/compose.ts";
+import { compose, summarise, totalCoverage } from "../src/compose.ts";
+import { DEFAULT_POLICY, loadProfile, type Policy, type Profile } from "../src/config/profile.ts";
 import { loadCache, type RunCache } from "../src/cache.ts";
 import {
   applyArbitration,
@@ -26,12 +27,16 @@ import {
 import { JevClient, asChoice, asNoul, noul } from "../src/jev/client.ts";
 import { arbitrationQuestions, arbitrationState, langName, CONTEXT_DEPENDENT } from "../src/jev/questions.ts";
 import { fold, norm } from "../src/util/text.ts";
+import { renderReason, type RuleId } from "../src/policy/rules.ts";
 import { TermIndex, indexByTerm } from "../src/glossary/match.ts";
 import type { TermConflict } from "../src/types.ts";
 
 export type SessionPaths = { cache: string; glossary: string; decisions: string };
 
-export type ReviewRow = Finding & {
+export type ReviewRow = Omit<Finding, "reasons"> & {
+  /** Rendered for display. `rules` is what to filter or group on. */
+  reasons: string[];
+  rules: RuleId[];
   verdict: Verdict | null;
   decidedText: string | null;
   decidedBy: string | null;
@@ -40,6 +45,7 @@ export type ReviewRow = Finding & {
 
 export class Session {
   private paths: SessionPaths;
+  private profile: Profile;
   private cache: RunCache;
   private corpus: Corpus;
   private entries: Map<string, Entry>;
@@ -47,12 +53,14 @@ export class Session {
   private decisions: Map<string, DecisionRecord>;
   private judgments: Map<string, EntryJudgment>;
   private findings: Finding[] = [];
-  private policy: Policy = POLICY;
+  private policy: Policy = DEFAULT_POLICY;
   private client: JevClient | null;
   private siblingIndex = new Map<string, { text: string; count: number }[]>();
 
-  constructor(paths: SessionPaths, client: JevClient | null) {
+  constructor(paths: SessionPaths, client: JevClient | null, profile: Profile = loadProfile()) {
     this.paths = paths;
+    this.profile = profile;
+    this.policy = profile.policy;
     this.cache = loadCache(paths.cache);
     this.corpus = this.cache.corpus;
     this.entries = new Map(this.corpus.entries.map((e) => [e.id, e]));
@@ -72,9 +80,9 @@ export class Session {
           status: "proposed" as const,
           source: "jev" as const,
           confidence: 0,
-          severity: NaN,
-          doNotTranslate: NaN,
-          covered: NaN,
+          severity: null,
+          doNotTranslate: null,
+          covered: null,
           variants: g.variants,
           entryIds: g.entryIds,
           guidance: "",
@@ -131,6 +139,7 @@ export class Session {
       glossary: this.currentGlossary(),
       registerNorms: new Map(this.cache.registerNorms),
       policy: this.policy,
+      unjudged: this.cache.unjudged,
     });
 
     const subs = new Map(this.cache.substitutions.map((x) => [decisionKey(x.entryId, x.lang), x]));
@@ -138,8 +147,8 @@ export class Session {
       const hit = subs.get(decisionKey(f.entryId, f.lang));
       if (!hit) continue;
       f.suggested = hit.suggested;
-      f.substitutionOk = Number.isNaN(hit.check) ? null : hit.check;
-      if (hit.note && !f.reasons.includes(hit.note)) f.reasons.push(hit.note);
+      f.substitutionOk = hit.check;
+      if (hit.note && !f.reasons.some((r) => r.rule === hit.note!.rule)) f.reasons.push(hit.note);
     }
     for (const f of this.findings) {
       if (f.action !== "auto-fix" || f.suggested) continue;
@@ -166,6 +175,7 @@ export class Session {
 
   stats() {
     return {
+      coverage: totalCoverage(this.cache.stages),
       summary: summarise(this.findings, this.corpus),
       glossary: glossaryStats(this.glossary),
       decisions: decisionStats(this.decisions),
@@ -212,6 +222,8 @@ export class Session {
     const e = this.entries.get(f.entryId);
     return {
       ...f,
+      reasons: f.reasons.map(renderReason),
+      rules: f.reasons.map((r) => r.rule),
       verdict: d?.verdict ?? null,
       decidedText: d?.text ?? null,
       decidedBy: d?.who ?? null,
@@ -357,9 +369,9 @@ export class Session {
       },
     );
     return {
-      meaning: asNoul(response.answers.meaning) ?? NaN,
-      grammatical: asNoul(response.answers.grammatical) ?? NaN,
-      glossaryOk: asNoul(response.answers.glossaryOk) ?? NaN,
+      meaning: asNoul(response.answers.meaning),
+      grammatical: asNoul(response.answers.grammatical),
+      glossaryOk: asNoul(response.answers.glossaryOk),
       ms: Math.round(performance.now() - t0),
     };
   }
@@ -387,7 +399,7 @@ export class Session {
       origin: "duplicate-source",
       trivial: false,
     };
-    const state = arbitrationState(conflict, this.entries, this.corpus.sourceLang, DOMAIN);
+    const state = arbitrationState(conflict, this.entries, this.corpus.sourceLang, this.profile.domain);
     const t0 = performance.now();
     const { response } = await this.client.one(state, arbitrationQuestions(conflict));
     const pick = asChoice(response.answers.canonical);
@@ -396,7 +408,7 @@ export class Session {
       contextDependent: pick?.choice === CONTEXT_DEPENDENT,
       confidence: pick?.confidence ?? 0,
       probabilities: pick?.probabilities ?? {},
-      doNotTranslate: asNoul(response.answers.doNotTranslate) ?? NaN,
+      doNotTranslate: asNoul(response.answers.doNotTranslate),
       ms: Math.round(performance.now() - t0),
     };
   }
@@ -415,6 +427,3 @@ export class Session {
     return this.glossary;
   }
 }
-
-export const DOMAIN =
-  "a B2B product configurator and order portal for building joinery (gates, doors, fences, windows)";

@@ -1,30 +1,23 @@
-import type { Action, Category, Corpus, Entry, EntryJudgment, Finding, GlossaryEntry, Lang, LintIssue } from "./types.ts";
+import type {
+  Action,
+  Category,
+  Corpus,
+  Coverage,
+  Entry,
+  EntryJudgment,
+  Finding,
+  GlossaryEntry,
+  Lang,
+  LintIssue,
+  StageStats,
+  Unjudged,
+} from "./types.ts";
 import { norm } from "./util/text.ts";
 import { indexByTerm } from "./glossary/match.ts";
+import { DEFAULT_POLICY, type Policy } from "./config/profile.ts";
+import { has, ruleLabel, type Reason, type RuleId } from "./policy/rules.ts";
 
-export type Policy = {
-  meaningBad: number;
-  meaningDoubtful: number;
-  adherenceBad: number;
-  uiStringMin: number;
-  registerMinSample: number;
-  registerMinDominance: number;
-  registerMinConfidence: number;
-  canonicalConfidence: number;
-  autoFixMaxSeverity: number;
-};
-
-export const POLICY: Policy = {
-  meaningBad: 0.35,
-  meaningDoubtful: 0.7,
-  adherenceBad: 0.4,
-  uiStringMin: 0.25,
-  registerMinSample: 25,
-  registerMinDominance: 0.8,
-  registerMinConfidence: 0.6,
-  canonicalConfidence: 0.6,
-  autoFixMaxSeverity: 2,
-};
+export type { Policy };
 
 const HARD_CODES = new Set(["placeholder-mismatch", "tag-mismatch"]);
 const COSMETIC_CODES = new Set(["case-inconsistent", "terminal-punctuation", "whitespace", "spacing-variant"]);
@@ -36,10 +29,12 @@ export type ComposeInput = {
   glossary: GlossaryEntry[];
   registerNorms: Map<Lang, { formalShare: number; n: number }>;
   policy?: Policy;
+  /** Keys the audit asked about and did not get an answer for. */
+  unjudged?: Unjudged[];
 };
 
 export function compose(input: ComposeInput): Finding[] {
-  const policy = input.policy ?? POLICY;
+  const policy = input.policy ?? DEFAULT_POLICY;
   const targets = input.corpus.langs.filter((l) => l !== input.corpus.sourceLang);
 
   const lintByPair = new Map<string, LintIssue[]>();
@@ -51,12 +46,13 @@ export function compose(input: ComposeInput): Finding[] {
   }
 
   const glossaryIndex = indexByTerm(input.glossary, (g) => g.term);
+  const blind = new Map((input.unjudged ?? []).map((u) => [u.entryId, u.stage]));
 
   const findings: Finding[] = [];
 
   for (const entry of input.corpus.entries) {
     const j = input.judgments.get(entry.id);
-    const isUi = j ? (Number.isNaN(j.isUiString) ? 1 : j.isUiString) : 1;
+    const isUi = j?.isUiString ?? 1;
     const applicable = glossaryIndex.matches(entry.source).flatMap((m) => m.value);
 
     for (const lang of targets) {
@@ -64,34 +60,35 @@ export function compose(input: ComposeInput): Finding[] {
       const lint = lintByPair.get(`${entry.id}\u0000${lang}`) ?? [];
       if (!current && !lint.length) continue;
 
-      const reasons: string[] = [];
+      const reasons: Reason[] = [];
       const categories = new Set<Category>();
       let severity = 0;
       let confidence = 1;
+      const blindStage = blind.get(entry.id);
 
       for (const i of lint) {
         if (HARD_CODES.has(i.code)) {
-          reasons.push(`${i.code} — ${i.detail}`);
+          reasons.push({ rule: "lint", code: i.code, detail: i.detail });
           severity = Math.max(severity, 3);
           categories.add("integrity");
         } else if (i.code === "empty-translation") {
-          reasons.push("no translation");
+          reasons.push({ rule: "no-translation" });
           severity = Math.max(severity, 2);
           categories.add("completeness");
         } else if (i.code === "untranslated-copy") {
-          reasons.push(`identical to the ${input.corpus.sourceLang} source`);
+          reasons.push({ rule: "untranslated-copy", sourceLang: input.corpus.sourceLang });
           severity = Math.max(severity, 2);
           categories.add("completeness");
         } else if (i.code === "duplicate-source-divergent") {
-          reasons.push(`same source translated differently elsewhere — ${i.detail}`);
+          reasons.push({ rule: "duplicate-source-divergent", detail: i.detail });
           severity = Math.max(severity, 1);
           categories.add("consistency");
         } else if (i.code === "spacing-variant") {
-          reasons.push(`spacing or case varies between otherwise identical translations — ${i.detail}`);
+          reasons.push({ rule: "spacing-variant", detail: i.detail });
           severity = Math.max(severity, 0);
           categories.add("consistency");
         } else if (COSMETIC_CODES.has(i.code)) {
-          reasons.push(`${i.code} — ${i.detail}`);
+          reasons.push({ rule: "lint", code: i.code, detail: i.detail });
           severity = Math.max(severity, 1);
           categories.add("style");
         }
@@ -99,14 +96,14 @@ export function compose(input: ComposeInput): Finding[] {
 
       if (j && isUi >= policy.uiStringMin) {
         const meaning = j.meaning[lang];
-        if (meaning !== undefined && !Number.isNaN(meaning)) {
+        if (meaning !== undefined) {
           if (meaning < policy.meaningBad) {
-            reasons.push(`meaning not preserved (p=${meaning.toFixed(2)}) — check negation, quantity and condition`);
+            reasons.push({ rule: "meaning-not-preserved", p: meaning, threshold: policy.meaningBad });
             severity = Math.max(severity, 3);
             categories.add("meaning");
             confidence = Math.min(confidence, 1 - meaning);
           } else if (meaning < policy.meaningDoubtful) {
-            reasons.push(`meaning uncertain (p=${meaning.toFixed(2)})`);
+            reasons.push({ rule: "meaning-uncertain", p: meaning, threshold: policy.meaningDoubtful });
             severity = Math.max(severity, 1);
             categories.add("meaning");
             confidence = Math.min(confidence, 1 - meaning);
@@ -115,9 +112,13 @@ export function compose(input: ComposeInput): Finding[] {
 
         const adheres = j.adheres[lang];
         const terms = applicable.filter((g) => g.lang === lang && g.canonical);
-        if (terms.length > 0 && adheres !== undefined && !Number.isNaN(adheres) && adheres < policy.adherenceBad) {
-          const named = terms.map((g) => `"${g.term}" → "${g.canonical}"`).join(", ");
-          reasons.push(`does not use the canonical term${named ? ` (${named})` : ""} (p=${adheres.toFixed(2)})`);
+        if (terms.length > 0 && adheres !== undefined && adheres < policy.adherenceBad) {
+          reasons.push({
+            rule: "canonical-not-used",
+            p: adheres,
+            threshold: policy.adherenceBad,
+            terms: terms.map((g) => ({ term: g.term, canonical: g.canonical! })),
+          });
           severity = Math.max(severity, Math.min(2, Math.max(1, Math.round(maxSeverity(terms)))));
           categories.add("consistency");
           confidence = Math.min(confidence, 1 - adheres);
@@ -133,21 +134,29 @@ export function compose(input: ComposeInput): Finding[] {
             reg.form === (houseIsFormal ? "informal" : "formal") &&
             reg.confidence >= policy.registerMinConfidence;
           if (deviates) {
-            reasons.push(
-              `register drift — ${Math.round(houseShare * 100)}% of ${lang} strings that address the reader are ` +
-                `${houseIsFormal ? "formal" : "informal"}, this one is ${reg.form} (confidence ${reg.confidence.toFixed(2)})`,
-            );
+            reasons.push({
+              rule: "register-drift",
+              lang,
+              house: houseIsFormal ? "formal" : "informal",
+              observed: reg.form,
+              share: houseShare,
+              confidence: reg.confidence,
+            });
             severity = Math.max(severity, 1);
             categories.add("style");
             confidence = Math.min(confidence, reg.confidence);
           }
         }
       } else if (j && isUi < policy.uiStringMin && reasons.length) {
-        reasons.push(`(not a user-facing string, p=${isUi.toFixed(2)} — cosmetic checks only)`);
+        reasons.push({ rule: "not-user-facing", p: isUi, threshold: policy.uiStringMin });
         severity = Math.min(severity, 1);
       }
 
       if (reasons.length === 0) continue;
+
+      // The semantic checks did not run here. Say so on the row rather than letting it
+      // read as a key that passed them.
+      if (blindStage !== undefined) reasons.push({ rule: "not-judged", stage: blindStage });
 
       findings.push({
         entryId: entry.id,
@@ -163,6 +172,7 @@ export function compose(input: ComposeInput): Finding[] {
         action: decideAction(severity, reasons, lint),
         confidence,
         substitutionOk: null,
+        judged: blindStage === undefined,
       });
     }
   }
@@ -183,32 +193,22 @@ const worstCategory = (set: Set<Category>): Category =>
   CATEGORY_RANK.find((c) => set.has(c)) ?? "style";
 
 const maxSeverity = (gs: GlossaryEntry[]): number =>
-  gs.reduce((m, g) => (Number.isNaN(g.severity) ? m : Math.max(m, g.severity)), 1);
+  gs.reduce((m, g) => (g.severity === null ? m : Math.max(m, g.severity)), 1);
 
-function decideAction(severity: number, reasons: string[], lint: LintIssue[]): Action {
+function decideAction(severity: number, reasons: Reason[], lint: LintIssue[]): Action {
   if (lint.some((i) => i.code === "empty-translation")) return "needs human";
   if (lint.some((i) => HARD_CODES.has(i.code))) return "needs human";
-  if (reasons.some((r) => r.startsWith("meaning not preserved"))) return "needs human";
-  if (reasons.some((r) => r.startsWith("does not use the canonical term"))) return "auto-fix";
+  if (has(reasons, "meaning-not-preserved")) return "needs human";
+  if (has(reasons, "canonical-not-used")) return "auto-fix";
   if (severity <= 1) return "keep";
   return "needs human";
-}
-
-export function reasonHead(reason: string): string {
-  return reason
-    .replace(/"[^"]*"/g, "…")
-    .replace(/\(p=[\d.]+\)/g, "")
-    .replace(/\(confidence [\d.]+\)/g, "")
-    .replace(/\((grammar|meaning|not an improvement)[^)]*\)/g, "")
-    .split(" —")[0]
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 export function summarise(findings: Finding[], corpus: Corpus) {
   const bySeverity = [0, 0, 0, 0];
   const byLang = new Map<Lang, number>();
   const byAction = new Map<Action, number>();
+  const byRule = new Map<RuleId, number>();
   const byReason = new Map<string, number>();
   const byCategory = new Map<Category, number>();
   for (const f of findings) {
@@ -216,7 +216,11 @@ export function summarise(findings: Finding[], corpus: Corpus) {
     byLang.set(f.lang, (byLang.get(f.lang) ?? 0) + 1);
     byAction.set(f.action, (byAction.get(f.action) ?? 0) + 1);
     byCategory.set(f.category, (byCategory.get(f.category) ?? 0) + 1);
-    for (const r of f.reasons) byReason.set(reasonHead(r), (byReason.get(reasonHead(r)) ?? 0) + 1);
+    for (const r of f.reasons) {
+      byRule.set(r.rule, (byRule.get(r.rule) ?? 0) + 1);
+      const label = ruleLabel(r);
+      byReason.set(label, (byReason.get(label) ?? 0) + 1);
+    }
   }
   const touched = new Set(findings.map((f) => f.entryId));
   return {
@@ -228,9 +232,43 @@ export function summarise(findings: Finding[], corpus: Corpus) {
     byAction: [...byAction.entries()].sort((a, b) => b[1] - a[1]),
     byCategory: CATEGORY_RANK.filter((c) => byCategory.has(c)).map((c) => [c, byCategory.get(c)!] as [Category, number]),
     byReason: [...byReason.entries()].sort((a, b) => b[1] - a[1]),
+    byRule: [...byRule.entries()].sort((a, b) => b[1] - a[1]),
   };
 }
 
 export type Summary = ReturnType<typeof summarise>;
 
 export const entryIndex = (entries: Entry[]): Map<string, Entry> => new Map(entries.map((e) => [e.id, e]));
+
+/**
+ * What the run actually saw, per stage and in total.
+ *
+ * `report` and the workbook state this because a summary computed over partial evidence
+ * is a claim about a population it did not measure.
+ */
+export function coverageOf(stages: StageStats[]): Map<string, Coverage> {
+  const out = new Map<string, Coverage>();
+  for (const s of stages) {
+    out.set(s.name, {
+      attempted: s.requests,
+      answered: s.requests - s.errors,
+      failed: s.errors,
+      skipped: s.skipped,
+    });
+  }
+  return out;
+}
+
+export const totalCoverage = (stages: StageStats[]): Coverage =>
+  stages.reduce<Coverage>(
+    (a, s) => ({
+      attempted: a.attempted + s.requests,
+      answered: a.answered + (s.requests - s.errors),
+      failed: a.failed + s.errors,
+      skipped: a.skipped + s.skipped,
+    }),
+    { attempted: 0, answered: 0, failed: 0, skipped: 0 },
+  );
+
+/** 1 when everything asked came back. The number a summary has to earn. */
+export const completeness = (c: Coverage): number => (c.attempted === 0 ? 1 : c.answered / c.attempted);

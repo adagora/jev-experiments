@@ -1,4 +1,6 @@
 import ExcelJS from "exceljs";
+import { renderReason } from "../policy/rules.ts";
+import { completeness, totalCoverage } from "../compose.ts";
 import type { Corpus, Finding, GlossaryEntry, Lang, LintIssue, StageStats } from "../types.ts";
 import type { Summary } from "../compose.ts";
 import { langName } from "../jev/questions.ts";
@@ -96,6 +98,19 @@ function dashboardSheet(wb: ExcelJS.Workbook, input: ReportInput): void {
   kv("Translations examined", input.corpus.entries.reduce((n, e) => n + Object.keys(e.tr).length, 0));
   ws.addRow([]);
 
+  const cov = totalCoverage(input.stages);
+  if (cov.failed > 0) {
+    section("Coverage");
+    const row = kv(
+      "  answered",
+      `${cov.answered} of ${cov.attempted}`,
+      `${cov.failed} request${cov.failed === 1 ? "" : "s"} did not come back. Those keys were not judged, ` +
+        `so the counts below are a floor, not a total.`,
+    );
+    row.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFE08A" } };
+    ws.addRow([]);
+  }
+
   section("Findings");
   kv("Total", input.summary.findings);
   kv("Keys affected", `${input.summary.entriesTouched} of ${input.summary.entriesTotal}`,
@@ -159,7 +174,7 @@ function findingsSheet(wb: ExcelJS.Workbook, input: ReportInput): void {
       f.suggested ?? "",
       "",
       { formula: `IF($I${ws.rowCount + 1}="accept",$H${ws.rowCount + 1},$G${ws.rowCount + 1})`, result: f.current },
-      f.reasons.join("\n"),
+      f.reasons.map(renderReason).join("\n"),
       Number(f.confidence.toFixed(3)),
       f.substitutionOk === null ? "" : Number(f.substitutionOk.toFixed(3)),
       f.entryId,
@@ -199,7 +214,7 @@ function glossarySheet(wb: ExcelJS.Workbook, input: ReportInput): void {
 
   const ordered = [...input.glossary].sort(
     (a, b) =>
-      (Number.isNaN(b.severity) ? 0 : b.severity) - (Number.isNaN(a.severity) ? 0 : a.severity) ||
+      (b.severity ?? 0) - (a.severity ?? 0) ||
       b.entryIds.length - a.entryIds.length ||
       a.term.localeCompare(b.term) ||
       a.lang.localeCompare(b.lang),
@@ -211,19 +226,19 @@ function glossarySheet(wb: ExcelJS.Workbook, input: ReportInput): void {
       g.lang,
       g.canonical ?? "— context-dependent —",
       Number(g.confidence.toFixed(3)),
-      Number.isNaN(g.severity) ? "" : Number(g.severity.toFixed(2)),
-      Number.isNaN(g.interchangeable) ? "" : Number(g.interchangeable.toFixed(3)),
-      Number.isNaN(g.doNotTranslate) ? "" : Number(g.doNotTranslate.toFixed(3)),
-      Number.isNaN(g.covered) ? "" : Number(g.covered.toFixed(3)),
+      g.severity === null ? "" : Number(g.severity.toFixed(2)),
+      g.interchangeable === null ? "" : Number(g.interchangeable.toFixed(3)),
+      g.doNotTranslate === null ? "" : Number(g.doNotTranslate.toFixed(3)),
+      g.covered === null ? "" : Number(g.covered.toFixed(3)),
       g.variants.map((v) => `${v.text} (${v.count})`).join("  |  "),
       g.entryIds.length,
       g.origin,
     ]);
     row.getCell(9).alignment = { wrapText: true, vertical: "top" };
     if (!g.canonical) row.getCell(3).font = { italic: true, color: { argb: "FF8A6D00" } };
-    const sev = Number.isNaN(g.severity) ? 0 : Math.min(3, Math.round(g.severity));
+    const sev = g.severity === null ? 0 : Math.min(3, Math.round(g.severity));
     row.getCell(5).fill = { type: "pattern", pattern: "solid", fgColor: { argb: SEVERITY_FILL[sev] } };
-    if (!Number.isNaN(g.doNotTranslate) && g.doNotTranslate >= 0.5) {
+    if (g.doNotTranslate !== null && g.doNotTranslate >= 0.5) {
       row.getCell(7).font = { bold: true, color: { argb: "FF1F3B57" } };
     }
   }
@@ -315,6 +330,20 @@ function runSheet(wb: ExcelJS.Workbook, input: ReportInput): void {
     Number((requests / Math.max(0.001, wall / 1000)).toFixed(1)), "", "", "", "", Number(cost.toFixed(4)),
   ]);
   total.font = { bold: true };
+
+  const cov = totalCoverage(input.stages);
+  ws.addRow([]);
+  const covRow = ws.addRow([
+    "Coverage",
+    `${cov.answered} of ${cov.attempted} answered`,
+    cov.failed
+      ? `${cov.failed} failed — those units were not judged and produce only exact-check findings`
+      : "everything asked came back",
+    cov.skipped ? `${cov.skipped} skipped (nothing to judge, or filtered out)` : "",
+    `${(100 * completeness(cov)).toFixed(1)}%`,
+  ]);
+  covRow.font = { bold: cov.failed > 0 };
+  if (cov.failed > 0) covRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFE08A" } };
 
   ws.addRow([]);
   ws.addRow(["One LLM call per judgment at 3 s would take", Number(((judgments * 3) / 3600).toFixed(1)), "hours"]).font = { italic: true };
