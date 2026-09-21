@@ -622,8 +622,12 @@ const stageCost = (s: StageStats, profile: Profile): number =>
 
 function costOf(stages: StageStats[], profile: Profile, wallMs: number): Cost {
   const lat = stages.flatMap((s) => s.latencies);
+  const attempted = stages.reduce((n, s) => n + s.requests, 0);
+  const reused = stages.reduce((n, s) => n + s.reused, 0);
   return {
-    requests: stages.reduce((n, s) => n + s.requests, 0),
+    // What was sent. A reused judgment is in `reused`, where it costs nothing and says so.
+    requests: attempted - reused,
+    reused,
     judgments: stages.reduce((n, s) => n + s.judgments, 0),
     errors: stages.reduce((n, s) => n + s.errors, 0),
     retries: stages.reduce((n, s) => n + s.retries, 0),
@@ -919,6 +923,7 @@ async function cmdRun(args: Args): Promise<Envelope> {
 }
 
 async function cmdReport(args: Args): Promise<Envelope> {
+  const t0 = performance.now();
   const path = args.positional[0] ?? args.flags.get("in");
   if (!path) throw new Error("usage: translate-audit report <run.json>");
   const only = flagList(args, "only");
@@ -971,7 +976,11 @@ async function cmdReport(args: Args): Promise<Envelope> {
   return envelope("report", {
     inputs,
     coverage,
-    counts: { composed: r.composed, kept: r.kept, requests: 0, cost: "$0.00" },
+    counts: { composed: r.composed, kept: r.kept },
+    // Free, and it says so in the same shape every other command uses. `report` costing
+    // nothing is the point of the tower, so it is worth reporting as a measurement rather
+    // than as a formatted string an agent would have to parse back out of `counts`.
+    cost: costOf([], profile, performance.now() - t0),
     groups: {
       "by severity": bySeverity(r.summary.bySeverity),
       "by category": r.summary.byCategory.map(([c, n]) => [c, n] as [string, number]),

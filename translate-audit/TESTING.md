@@ -8,7 +8,7 @@ Seven layers, in order of how much they cost to run.
 npm test
 ```
 
-210 tests across fourteen files. They cover the parts where a silent bug would be invisible
+246 tests across seventeen files. They cover the parts where a silent bug would be invisible
 in the output:
 
 | File | What it pins down |
@@ -26,6 +26,8 @@ in the output:
 | `test/evidence.test.ts` | the four properties the judgment store exists for: an identical re-run makes zero requests, a killed run asks exactly what it was missing, a changed question re-asks only the keys that ask it, and with no store nothing is remembered. Plus the fingerprint itself — stable across state key order, and moving with the model, a rewording, a reordered option list or a reordered array |
 | `test/observe.test.ts` | that looking is free and accurate: `plan`'s predicted request count equals what a stubbed run then makes and drops to zero once the store holds the answers; `explain` names the evidence, threshold and flip point per rule; `inspect` resolves a key three ways; `status` survives an unreadable file; `diff` is empty between a run and itself |
 | `test/ledger.test.ts` | that a measurement survives the session that made it — the entry is derived from the envelope, appending never rewrites, and a diff states the delta while naming only what actually changed |
+| `test/review.test.ts` | the review app, which is otherwise 1,991 lines with no test between them: the glossary governing the queue rather than decorating it (suspend a term and the adherence findings go; restore it and they come back, canonical intact), a decision surviving a restart with the name against it, decided rows sorting last, and `/api/rows` carrying `rules` beside the rendered `reasons`. Four of these fail if `isEnforceable` stops reading the status — which is exactly how stage 9a broke |
+| `test/warm.test.ts` | that the warm loop survives a process boundary: the real CLI, twice, as child processes against a counting stub endpoint. The second run must send nothing, spend nothing, reuse exactly what the first bought and compose the same findings. Also that `plan`'s estimate is exact — it predicts the request count the run then makes, and zero once the store holds them |
 | `test/casebook.test.ts` | what each verdict means as a label, including the ones that mean nothing: a `defer`, an edit that changed no text, and a decision about a key the run does not contain all produce none. Stats return `null` rather than `0` when nothing has been reviewed |
 
 The round-trip test exists because **the workbook is a form, not a report**. `apply` reads
@@ -170,14 +172,21 @@ npm run build:web
 npm run review -- audit.run.json        # http://localhost:8788
 ```
 
-What to check by hand, in order of how quietly it can break:
+**Of the five checks below, only the browser and the model still need a human.**
+`test/review.test.ts` and `test/consistency.test.ts` run against a `Session` over a temp
+directory with a `null` client, in under a second and with no key: checks 1, 2 and 4 in full,
+the half of 3 that fails silently, and the answer half of 5. What is left for a person is that
+the page renders, and that a live `meaning` moves when the meaning does.
 
-1. **A decision survives a restart.** Decide a few rows, stop the server, start it again.
-   They are still there, with the right name against them. `audit.decisions.json` is
-   written through on every change, not on exit.
-2. **A glossary decision moves the queue.** Mark a term *depends on context* and the
-   adherence findings for its keys disappear immediately; restore it and they come back.
-   Measured rather than eyeballed:
+1. **A decision survives a restart.** *Automated* — a decision is re-read by a second
+   `Session` over the same paths, with its text, its author and what it replaced.
+   `audit.decisions.json` is written through on every change, not on exit, so nothing has to
+   be closed for the check to hold.
+2. **A glossary decision moves the queue.** *Automated*, twice: in-process through
+   `patchTerm`, and over the wire through `POST /api/glossary/<key>` against a real server on
+   an ephemeral port. Mark a term *depends on context* and the adherence findings for its keys
+   disappear; restore it and they come back — with the canonical intact, which is what makes
+   it an undo rather than a re-arbitration. By hand it is still one command:
 
    ```sh
    curl -s 'localhost:8788/api/rows?limit=20000' \
@@ -185,15 +194,28 @@ What to check by hand, in order of how quietly it can break:
    ```
 
    Rows carry `rules` alongside the rendered `reasons` precisely so this check matches on a
-   rule id rather than on a sentence that may be reworded.
+   rule id rather than on a sentence that may be reworded — itself pinned, by asserting the
+   id appears in `rules` and nowhere in the prose.
 
    This is the test that failed the first time. Findings were being keyed off the saved
    judgment rather than the current glossary, so the glossary decorated the queue instead
-   of governing it.
-3. **The live check discriminates.** Type a correct translation, then drop a negation from
-   it. `meaning` should fall hard. If every edit returns ~0.9, the state is not reaching
-   the request.
-4. **The decided rows sort last** and `unreviewed only` empties as you work.
+   of governing it. It failed a second time in stage 9a. Both failures now break four tests
+   in this file the moment `isEnforceable` stops reading the status.
+3. **The live check discriminates.** *Half automated.* Whether `meaning` falls when you drop
+   a negation is a property of the model and needs the endpoint: type a correct translation,
+   then break it. What is automated is the half that fails silently — that the source, the
+   proposed text and the enforceable glossary reach the request at all, checked against a stub
+   `fetchImpl` that records what it was sent, and that a suspended term reaches it as an empty
+   glossary. If every edit returns ~0.9 *and* the state is present, the model is the suspect.
+4. **The decided rows sort last** and `unreviewed only` empties as you work. *Automated* —
+   deciding the severity-3 row moves it behind the severity-2 one, and `undecidedOnly` counts
+   down to zero while the queue itself stays the same length.
+5. **The check panel shows a rule before a string is saved.** Open *Check a string*, type a
+   source string containing a settled term and a translation that uses a different rendering.
+   The violation appears as you type, with the replacement — and the network tab shows no
+   request left for it, because the panel sends `semantic: false` until you press *Check the
+   meaning*. *Automated* for the answer (`consistency.test.ts` pins that the free half asks
+   nothing and that the paid half asks once); the browser is what the human is checking.
 
 Running without `TYPESAFE_API_KEY` is a valid mode: the app loads, the queue works, the
 title bar says *No API key — live checks off*, and the editor says so too.
@@ -208,6 +230,13 @@ npm run audit -- run --synthetic 200 --langs de,uk          # warm: 0 requests, 
 The second run reports every request as `reused` and spends nothing. That is the check that
 the store is actually wired in — if the warm run costs money, the fingerprint is picking up
 something that should not be in it (a timestamp, a set iterated in a different order).
+
+`test/warm.test.ts` runs exactly this, **as two child processes against a stub endpoint that
+counts connections**, because the property is about a run started from a shell tomorrow and
+not about one function calling another. A fingerprint that is stable within a process and not
+across one would pass every test in `evidence.test.ts` and still restore the whole bill. The
+warm run has to report `requests 0`, `usd 0` and `reused` equal to the cold run's request
+count, produce identical counts, and leave the stub with no new connections.
 
 After changing a question, the warm run should re-ask **only** the units asking it. If it
 re-asks everything, the question set changed more than you meant; if it re-asks nothing, the

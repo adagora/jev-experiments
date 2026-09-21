@@ -4,10 +4,10 @@ import { compose, summarise, totalCoverage } from "../src/compose.ts";
 import { DEFAULT_POLICY, loadProfile, type Policy, type Profile } from "../src/config/profile.ts";
 import { loadCache, type RunCache } from "../src/cache.ts";
 import {
-  applyArbitration,
   decide,
   enforceable,
   glossaryStats,
+  isEnforceable,
   loadGlossary,
   manualTerm,
   saveGlossary,
@@ -24,9 +24,15 @@ import {
   type DecisionRecord,
   type Verdict,
 } from "../src/review/decisions.ts";
-import { JevClient, asChoice, asNoul, noul } from "../src/jev/client.ts";
-import { arbitrationQuestions, arbitrationState, langName, CONTEXT_DEPENDENT } from "../src/jev/questions.ts";
-import { fold, norm } from "../src/util/text.ts";
+import { JevClient, asChoice, asNoul } from "../src/jev/client.ts";
+import {
+  arbitrationQuestions,
+  arbitrationState,
+  langName,
+  liveCheckQuestions,
+  CONTEXT_DEPENDENT,
+} from "../src/jev/questions.ts";
+import { containsTerm, fold, norm, replaceTerm } from "../src/util/text.ts";
 import { renderReason, type RuleId } from "../src/policy/rules.ts";
 import { TermIndex, indexByTerm } from "../src/glossary/match.ts";
 import type { TermConflict } from "../src/types.ts";
@@ -70,29 +76,21 @@ export class Session {
     this.client = client;
 
     if (this.glossary.length === 0 && this.cache.glossary.length > 0) {
-      this.glossary = applyArbitration(
-        this.cache.glossary.map((g) => ({
-          key: termKey(g.term, g.lang),
-          term: g.term,
-          display: this.displayFor(g.term),
-          lang: g.lang,
-          canonical: null,
-          status: "proposed" as const,
-          source: "jev" as const,
-          confidence: 0,
-          severity: null,
-          doNotTranslate: null,
-          covered: null,
-          variants: g.variants,
-          entryIds: g.entryIds,
-          guidance: "",
-          note: "",
-          decidedBy: null,
-          decidedAt: null,
-          firstSeen: new Date().toISOString(),
-        })),
-        this.cache.glossary,
-      );
+      // A run's glossary is a record minus what a human settled, so this is a spread:
+      // nothing is rebuilt from a neighbouring field and nothing the run paid for is lost.
+      const now = new Date().toISOString();
+      this.glossary = this.cache.glossary.map((g) => ({
+        ...g,
+        key: termKey(g.term, g.lang),
+        display: this.displayFor(g.term),
+        status: "proposed" as const,
+        source: "jev" as const,
+        guidance: "",
+        note: "",
+        decidedBy: null,
+        decidedAt: null,
+        firstSeen: now,
+      }));
       saveGlossary(this.paths.glossary, this.glossary);
     }
 
@@ -348,7 +346,6 @@ export class Session {
     if (!this.client) throw new Error("no TYPESAFE_API_KEY — live checks are disabled");
     const e = this.entries.get(input.entryId);
     if (!e) throw new Error("no such key");
-    const name = langName(input.lang);
     const t0 = performance.now();
     const { response } = await this.client.one(
       {
@@ -356,17 +353,9 @@ export class Session {
         source: norm(e.source),
         developer_note: norm(e.description || e.context),
         proposed: norm(input.text),
-        glossary: this.glossaryFor(e, input.lang),
+        glossary: this.glossaryFor(e.source, input.lang),
       },
-      {
-        meaning: noul(
-          `Does \`proposed\` state the same thing as \`source\`, including every negation, number, condition and obligation it contains?`,
-        ),
-        grammatical: noul(`Is \`proposed\` well-formed, natural ${name} that a native speaker would write?`),
-        glossaryOk: noul(
-          `Does \`proposed\` use the canonical rendering given in \`glossary\` for every term it contains, allowing for normal inflection?`,
-        ),
-      },
+      liveCheckQuestions(input.lang),
     );
     return {
       meaning: asNoul(response.answers.meaning),
@@ -376,15 +365,93 @@ export class Session {
     };
   }
 
-  private glossaryFor(e: Entry, lang: Lang): { term: string; canonical: string; guidance?: string }[] {
+  /**
+   * Consistency for a string that is being written, rather than one that was audited.
+   *
+   * `checkEdit` needs a key the corpus already contains, which makes it a reviewer's tool:
+   * it can only answer about rows an audit already flagged. This answers about any text in
+   * any language, including a key nobody has translated yet — which is the moment the
+   * drift is cheapest to stop, because it has not happened.
+   *
+   * The glossary half is free and exact, and comes back with no API key at all. A
+   * translator typing `Entfernen` where the glossary settled on `Löschen` is a *fact*
+   * (L1), so it is established by matching rather than asked. Only the semantic half —
+   * does this still mean the source, is it good German — costs a request, and it is
+   * skipped entirely when there is no client or nothing to compare against.
+   */
+  async checkText(input: { source: string; lang: Lang; text: string; note?: string; semantic?: boolean }) {
+    const t0 = performance.now();
+    const source = norm(input.source);
+    const text = norm(input.text);
+    const rules = this.rulesFor(source, input.lang);
+
+    // Free: a rule is broken when the string carries a rendering the glossary rejected in
+    // place of the one it settled on.
+    const violations = rules.flatMap((r) => {
+      const canonical = r.canonical!;
+      if (containsTerm(fold(text), fold(canonical))) return [];
+      return r.variants
+        .filter((v) => fold(v.text) !== fold(canonical) && replaceTerm(text, v.text, canonical).count > 0)
+        .map((v) => ({
+          term: r.display,
+          used: v.text,
+          canonical,
+          guidance: r.guidance || undefined,
+          suggested: replaceTerm(text, v.text, canonical).text,
+        }));
+    });
+
+    const glossary = rules.map((r) => ({
+      term: r.display,
+      canonical: r.canonical!,
+      ...(r.guidance ? { guidance: r.guidance } : {}),
+    }));
+
+    // `semantic: false` asks for the free half alone. It is what an editor calls on every
+    // keystroke: the glossary answer is a fact about the text, so a translator who is right
+    // pays nothing and a translator who is wrong hears about it before they save.
+    if (!this.client || !source || !text || input.semantic === false) {
+      return { glossary, violations, judged: null, ms: Math.round(performance.now() - t0) };
+    }
+
+    const { response } = await this.client.one(
+      {
+        source_language: langName(this.corpus.sourceLang),
+        source,
+        developer_note: norm(input.note ?? ""),
+        proposed: text,
+        glossary,
+      },
+      liveCheckQuestions(input.lang),
+    );
+
+    return {
+      glossary,
+      violations,
+      judged: {
+        meaning: asNoul(response.answers.meaning),
+        grammatical: asNoul(response.answers.grammatical),
+        glossaryOk: asNoul(response.answers.glossaryOk),
+      },
+      ms: Math.round(performance.now() - t0),
+    };
+  }
+
+  private glossaryFor(source: string, lang: Lang): { term: string; canonical: string; guidance?: string }[] {
+    return this.rulesFor(source, lang).map((r) => ({
+      term: r.display,
+      canonical: r.canonical!,
+      ...(r.guidance ? { guidance: r.guidance } : {}),
+    }));
+  }
+
+  /** The enforceable terms whose source phrase appears in `source`. Free and exact. */
+  private rulesFor(source: string, lang: Lang): GlossaryRecord[] {
     const index = indexByTerm(
-      this.glossary.filter((r) => r.lang === lang && r.canonical),
+      this.glossary.filter((r) => r.lang === lang && isEnforceable(r)),
       (r) => r.term,
     );
-    return index
-      .matches(e.source)
-      .flatMap((m) => m.value)
-      .map((r) => ({ term: r.display, canonical: r.canonical!, ...(r.guidance ? { guidance: r.guidance } : {}) }));
+    return index.matches(source).flatMap((m) => m.value);
   }
 
   async arbitrateTerm(key: string) {

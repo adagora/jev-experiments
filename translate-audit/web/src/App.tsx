@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Review } from "./ui/Review.tsx";
 import { Glossary } from "./ui/Glossary.tsx";
 import { Summary } from "./ui/Summary.tsx";
+import { Check } from "./ui/Check.tsx";
 import { api, getWho, setWho } from "./lib/api.ts";
 import { CATEGORIES, STATUSES, type GlossaryRow, type Meta, type ReviewRow, type Stats } from "./lib/wire.ts";
 
 const PAGE = 200;
-type Sheet = "review" | "glossary" | "summary";
+type Sheet = "review" | "glossary" | "check" | "summary";
 
 export default function App() {
   const [meta, setMeta] = useState<Meta | null>(null);
@@ -135,6 +136,13 @@ export default function App() {
           <button className={`tab ${sheet === "glossary" ? "on" : ""}`} onClick={() => setSheet("glossary")}>
             Glossary <span className="n">{stats.glossary.decided}/{stats.glossary.total}</span>
           </button>
+          <button
+            className={`tab ${sheet === "check" ? "on" : ""}`}
+            onClick={() => setSheet("check")}
+            title="Check a string you are writing — the glossary half costs nothing"
+          >
+            Check a string
+          </button>
           <button className={`tab ${sheet === "summary" ? "on" : ""}`} onClick={() => setSheet("summary")}>
             Summary
           </button>
@@ -222,6 +230,9 @@ export default function App() {
             live={meta.live}
             toast={showToast}
           />
+        )}
+        {sheet === "check" && (
+          <Check langs={meta.langs} sourceLang={meta.sourceLang} live={meta.live} toast={showToast} />
         )}
         {sheet === "summary" && <Summary meta={meta} stats={stats} />}
       </div>

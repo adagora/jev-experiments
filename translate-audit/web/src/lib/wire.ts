@@ -50,9 +50,13 @@ export type GlossaryRow = {
 
 export type StageStats = {
   name: string;
+  /** Units the stage tried. `requests - reused` is how many were actually sent. */
   requests: number;
   judgments: number;
   errors: number;
+  /** Units answered from evidence already on disk: attempted, answered, and free. */
+  reused: number;
+  skipped: number;
   retries: number;
   wallMs: number;
   latencies: number[];
@@ -118,6 +122,18 @@ export type EntryDetail = {
 };
 
 export type EditCheck = { meaning: number; grammatical: number; glossaryOk: number; ms: number };
+
+/**
+ * What `POST /api/consistency` answers for a string being written. `violations` and
+ * `glossary` are established by matching and cost nothing; `judged` is the only part that
+ * takes a request, and it is `null` when none was made — never a faked number.
+ */
+export type Consistency = {
+  glossary: { term: string; canonical: string; guidance?: string }[];
+  violations: { term: string; used: string; canonical: string; guidance?: string; suggested: string }[];
+  judged: { meaning: number | null; grammatical: number | null; glossaryOk: number | null } | null;
+  ms: number;
+};
 
 export type TermOpinion = {
   canonical: string | null;

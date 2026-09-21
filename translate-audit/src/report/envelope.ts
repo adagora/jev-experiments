@@ -19,8 +19,21 @@ export type Table = {
   note?: string;
 };
 
+/**
+ * What the command spent.
+ *
+ * `requests` is what was *sent*, not what was asked about: a unit answered from the
+ * evidence store made no request, waited for nothing and cost nothing, and it is counted
+ * in `reused` instead. Every other field here is already about attempts only — `errors`,
+ * `retries` and the latency percentiles all exclude reused units — so counting them as
+ * requests was the one number in this object that described work nobody did. It is what
+ * makes a warm run legible: `0 requests · 6,968 reused · $0.00`.
+ *
+ * The per-stage table keeps both, under `requests` (units attempted) and `reused`.
+ */
 export type Cost = {
   requests: number;
+  reused: number;
   judgments: number;
   errors: number;
   retries: number;
@@ -126,7 +139,10 @@ export function render(e: Envelope): string {
 
   if (e.cost) {
     const c = e.cost;
-    out.push(`${PAD}${c.requests} requests · ${c.judgments} judgments · ${c.errors} errors · ${c.retries} retries`);
+    out.push(
+      `${PAD}${c.requests} requests${c.reused ? ` · ${c.reused} reused` : ""} · ${c.judgments} judgments · ` +
+        `${c.errors} errors · ${c.retries} retries`,
+    );
     out.push(`${PAD}p50 ${c.p50Ms} ms · p95 ${c.p95Ms} ms · ${fmtMs(c.wallMs)} wall · ${fmtUsd(c.usd)}`);
     if (c.judgments > 0) {
       out.push(`${PAD}one LLM call per judgment at 3 s ≈ ${((c.judgments * 3) / 3600).toFixed(1)} h`);

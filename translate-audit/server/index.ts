@@ -164,6 +164,22 @@ export function createServer(opts: ServeOptions): { server: http.Server; session
           return json(200, r);
         }
 
+        // Consistency for a string being written, against the glossary as it stands now.
+        // Takes source text rather than a key id, so a TMS or an editor can call it for a
+        // string the corpus has never contained. The glossary half answers with no API key.
+        if (p === "/api/consistency") {
+          if (!body.source || !body.lang) return json(400, { error: "source and lang are required" });
+          const r = await session.checkText({
+            source: String(body.source),
+            lang: String(body.lang),
+            text: String(body.text ?? ""),
+            note: body.note === undefined ? undefined : String(body.note),
+            // Absent means both halves, as documented. `false` asks for the free one only.
+            semantic: body.semantic === undefined ? undefined : body.semantic !== false,
+          });
+          return json(200, r);
+        }
+
         if (p.startsWith("/api/arbitrate/")) {
           const key = decodeURIComponent(p.slice("/api/arbitrate/".length));
           return json(200, await session.arbitrateTerm(key));

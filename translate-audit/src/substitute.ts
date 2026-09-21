@@ -27,24 +27,57 @@ export function proposeSubstitutions(
     else byLang.set(g.lang, [g]);
   }
 
+  // A total order over the candidate terms, so which fix a finding gets is a function of
+  // the inputs rather than of which lane finished first: worst damage first, then the most
+  // specific term, then the name. Ties broken all the way down, because "mostly ordered"
+  // reproduces right up until the day it does not.
+  for (const list of byLang.values()) {
+    list.sort(
+      (a, b) =>
+        (b.severity ?? 0) - (a.severity ?? 0) ||
+        b.term.length - a.term.length ||
+        a.term.localeCompare(b.term) ||
+        (a.canonical ?? "").localeCompare(b.canonical ?? ""),
+    );
+  }
+
   const out: Proposal[] = [];
   for (const f of findings) {
     if (f.action !== "auto-fix" || !f.current) continue;
     const candidates = byLang.get(f.lang) ?? [];
     const sourceFolded = fold(f.source);
 
+    // At most one proposal per finding.
+    //
+    // Several glossary terms can apply to one string, and every proposal used to hold a
+    // reference to the same `Finding` — so whichever request returned last overwrote
+    // `suggested`, `substitutionOk` and `action`, while `reasons` accumulated all of them
+    // and could carry both a verified and a rejected verdict for the same row. On the
+    // production corpus 1,040 requests stored 1,019 suggestions; the other 21 were paid
+    // for and dropped.
+    //
+    // Composing the fixes instead is the tempting repair and it is a trap: each
+    // verification asks whether one exact `after` string is grammatical and still means
+    // the source. Apply a second edit on top of it and that string no longer exists, so
+    // the run would ship text nobody judged while holding a receipt that says verified.
+    //
+    // Nothing is hidden by choosing one. The finding's `canonical-not-used` reason already
+    // names every term that applies, so the reviewer sees the rest and the next run — read
+    // against a glossary that has moved on — proposes the next one.
     for (const g of candidates) {
       if (!containsTerm(sourceFolded, g.term)) continue;
       const canonical = g.canonical!;
       const losers = g.variants
         .map((v) => v.text)
         .filter((t) => fold(t) !== fold(canonical))
-        .sort((a, b) => b.length - a.length);
+        .sort((a, b) => b.length - a.length || a.localeCompare(b));
 
-      for (const loser of losers) {
-        const { text, count } = replaceTerm(f.current, loser, canonical);
-        if (count === 0 || text === f.current) continue;
-        out.push({ finding: f, from: loser, to: canonical, before: f.current, after: text });
+      const hit = losers
+        .map((loser) => ({ loser, ...replaceTerm(f.current!, loser, canonical) }))
+        .find((r) => r.count > 0 && r.text !== f.current);
+
+      if (hit) {
+        out.push({ finding: f, from: hit.loser, to: canonical, before: f.current, after: hit.text });
         break;
       }
     }

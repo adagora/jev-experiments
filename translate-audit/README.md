@@ -16,9 +16,9 @@ with a dropdown next to every decision.
   mined             3326 terms → 870 contested ← no model, no cost
   arbitrate         870 requests               18 s
   audit             6968 requests              150 s
-  substitute        1056 requests              21 s
+  substitute        1040 requests              21 s
 
-  8894 requests · 99933 judgments · 0 errors
+  8878 requests · 99734 judgments · 0 errors
   p50 321 ms · p95 453 ms · 192.8 s wall · $11.89
   one LLM call per judgment at 3 s ≈ 83.3 h
 ```
@@ -63,7 +63,7 @@ in under a second:
 
 ```sh
 translate-audit report audit.run.json --meaning-bad 0.2 --min-severity 2 --only consistency
-#   262 findings composed, 37 kept        → audit.xlsx   (0 requests, $0.00)
+#   19522 findings composed, 639 kept     → audit.xlsx   (0 requests, $0.00)
 ```
 
 ## Measured, not asserted
@@ -254,6 +254,63 @@ Decisions land in `audit.decisions.json`, the glossary in `audit.glossary.json`,
 through on every change. Everyone with the link works on the same queue and the footer
 says who did what.
 
+## Catching it before it is written
+
+Everything above finds drift that already happened. The cheapest moment to stop it is the
+one before — while a translator is still typing — and that is a different question, because
+the key they are working on may not exist yet.
+
+`POST /api/consistency` answers it for any string, in any language, whether or not the
+corpus has ever contained it:
+
+```sh
+curl -s localhost:8788/api/consistency -H 'content-type: application/json' \
+  -d '{"source":"Zlecenie odrzucone przez konstruktora","lang":"it",
+       "text":"Ordine Approvato dal tecnico"}'
+```
+```json
+{ "violations": [ { "term": "odrzucone przez konstruktora",
+                    "used": "Approvato dal tecnico",
+                    "canonical": "rifiutato dal tecnico",
+                    "suggested": "Ordine Rifiutato dal tecnico" } ],
+  "judged": { "meaning": 0.01, "grammatical": 0.62, "glossaryOk": 0.28 } }
+```
+
+That is the workflow-status inversion from the table above — *rejected* arriving as
+*approved* — caught on a key no audit has ever seen.
+
+**The glossary half is free and needs no API key.** Whether a string uses the rendering the
+glossary settled on is a *fact* about the text, so it is established by matching, not asked
+(L1). `violations` comes back either way, with the exact case-preserving replacement. Only
+`meaning` / `grammatical` / `glossaryOk` cost a request, and they are simply absent —
+`judged: null` — when there is no key.
+
+A term a translator suspended enforces nothing here either: `context-dependent` and
+`rejected` are gated on status, in the same predicate the audit uses, so the queue and the
+editor can never disagree about what the glossary currently says.
+
+The review app calls it from a **Check a string** panel: type a source string and a draft,
+and the glossary rules that apply appear as you type, with the exact replacement to take when
+one is broken. That runs on `semantic: false`, which asks for the free half alone — so a
+translator who is right pays nothing, and the meaning check is a button they press rather
+than a cost they incur per keystroke.
+
+```sh
+# what the panel sends on every keystroke: no key, no request, no cost
+curl -s localhost:8788/api/consistency -H 'content-type: application/json' \
+  -d '{"source":"Tytuł zgłoszenia jest wymagany","lang":"de",
+       "text":"Meldungstitel ist erforderlich","semantic":false}'
+```
+```json
+{ "glossary":   [ { "term": "tytuł zgłoszenia", "canonical": "der Titel der Anwendung" } ],
+  "violations": [ { "used": "Meldungstitel", "canonical": "der Titel der Anwendung",
+                    "suggested": "Der Titel der Anwendung ist erforderlich" } ],
+  "judged": null, "ms": 6 }
+```
+
+Six milliseconds, against the 1,338-term glossary in this directory, on a string the corpus
+has never contained — and the replacement keeps the sentence's capitalisation.
+
 ## The glossary is a system, not an artifact
 
 A glossary that is mined, arbitrated and thrown away is a report. This one remembers:
@@ -387,7 +444,7 @@ cheaper and blinder — the best finds above had no exact defect at all. `--no-f
 substitution. `--concurrency` defaults to 12 lanes.
 
 ```sh
-npm test        # 210 tests: text facts, mining, policy, substitution gates, xlsx round-trip, the glossary's memory
+npm test        # 246 tests: text facts, mining, policy, substitution gates, xlsx round-trip, the glossary's memory, the review app
 npm run lint
 npm run typecheck
 ```

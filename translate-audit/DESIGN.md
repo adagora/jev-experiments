@@ -113,10 +113,14 @@ One name per thing, used in code, docs, CLI and UI alike.
 | **coverage** | the share of attempted units that actually have evidence |
 | **ledger** | the append-only record of what each run and measurement produced |
 
-`GlossaryEntry` and `GlossaryRecord` are two shapes of one thing, converted lossily in both
-directions — `asGlossaryEntries` drops status, `enforceable` fabricates `origin`, and both
-overwrite `interchangeable` with `NaN`. One shape, with the level-4 view derived by a
-function that hides nothing, retires the pair.
+`GlossaryEntry` and `GlossaryRecord` were two shapes of one thing, converted lossily in both
+directions — `asGlossaryEntries` dropped status, `enforceable` fabricated `origin` from
+`source`, and both replaced `interchangeable` with nothing. There is one shape now:
+`GlossaryRecord` **is** a `GlossaryEntry` plus what a human settled, so the level-4 view is a
+pick of eleven fields that can drop things and cannot invent them. `enforceable` is that pick
+over the records `isEnforceable` admits; `asGlossaryEntries` is the same pick over all of
+them. What a `do-not-translate` decision means now lives on the record — set once, in
+`decide` — rather than being re-derived from the status at each conversion.
 
 ## The keystone: evidence, fingerprinted
 
@@ -192,7 +196,7 @@ finding 4821/de  severity 3  needs human
   would become severity 1 at meaningBad <= 0.11
 ```
 
-`autoFixMaxSeverity` — declared, defaulted, tested, read by nothing — goes away in the same
+`autoFixMaxSeverity` — declared, defaulted, tested, read by nothing — went away in the same
 pass, because a policy field that no rule consults cannot exist once rules are enumerated.
 
 ## Coverage
@@ -219,7 +223,7 @@ Five memories, each with one owner and an explicit rule about who may write it.
 |---|---|---|---|
 | **Glossary** | `*.glossary.json` | mining, arbitration, humans | arbitration, once a human has decided (L3) |
 | **Decisions** | `*.decisions.json` | humans only | everything |
-| **Evidence** | `evidence/*.jsonl` | the client | everything — append-only (L4) |
+| **Evidence** | `<out>.evidence.jsonl` | the client | everything — append-only (L4) |
 | **Ledger** | `runs/*.jsonl` | `run`, `score`, `probe` | everything — append-only |
 | **Case book** | derived | derived | — |
 
@@ -320,7 +324,8 @@ drift from its envelope.
 remember.
 
 It is `null` at the type level now, and the conversions exist nowhere because there is nothing
-to convert: `GlossaryFile` is just `GlossaryRecord[]`. `NaN` survives only where it is a
+to convert: `GlossaryFile` is a version stamp around `GlossaryRecord[]`, and the records are
+already JSON-shaped. `NaN` survives only where it is a
 genuine numeric guard — `calibrate.ts` and `probe.ts` reporting that there was no data to
 compute a rate from.
 
@@ -339,3 +344,5 @@ compute a rate from.
 | the ledger | ✓ | |
 | the case book | ✓ | |
 | unknown as `null` | ✓ | |
+| one glossary shape | ✓ | |
+| the review app under test | ✓ | |

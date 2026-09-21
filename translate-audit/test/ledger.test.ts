@@ -30,7 +30,7 @@ const scoreEnvelope = (questions: string) =>
     inputs: { corpus: "synthetic (400 keys)", seed: 20250920, keys: 400, questions },
     coverage: { attempted: 420, answered: 420, failed: 0, skipped: 0 },
     counts: { "injected defects": 157 },
-    cost: { requests: 420, judgments: 5200, errors: 0, retries: 0, usd: 0.55, wallMs: 15000, p50Ms: 300, p95Ms: 450 },
+    cost: { requests: 420, reused: 0, judgments: 5200, errors: 0, retries: 0, usd: 0.55, wallMs: 15000, p50Ms: 300, p95Ms: 450 },
   });
 
 describe("the ledger records what a run produced", () => {

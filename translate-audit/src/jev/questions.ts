@@ -262,6 +262,27 @@ export function substitutionQuestions(lang: Lang): Record<string, Question> {
 }
 
 /**
+ * The live check: one proposed rendering, judged as it is typed.
+ *
+ * Asked by the reviewer editing a flagged row and by the editor checking a string that has
+ * no finding at all. One definition, because two copies of the same three questions drift,
+ * and then the queue and the editor disagree about the same text while both calling
+ * themselves the live check.
+ */
+export function liveCheckQuestions(lang: Lang): Record<string, Question> {
+  const name = langName(lang);
+  return {
+    meaning: noul(
+      `Does \`proposed\` state the same thing as \`source\`, including every negation, number, condition and obligation it contains?`,
+    ),
+    grammatical: noul(`Is \`proposed\` well-formed, natural ${name} that a native speaker would write?`),
+    glossaryOk: noul(
+      `Does \`proposed\` use the canonical rendering given in \`glossary\` for every term it contains, allowing for normal inflection?`,
+    ),
+  };
+}
+
+/**
  * A short hash of every question this build asks, over a fixed fixture.
  *
  * It changes when any question's wording, options or criteria change, and not otherwise —

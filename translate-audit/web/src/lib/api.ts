@@ -1,4 +1,4 @@
-import type { EditCheck, EntryDetail, GlossaryRow, Meta, ReviewRow, Stats, TermOpinion, TermStatus, Verdict } from "./wire.ts";
+import type { Consistency, EditCheck, EntryDetail, GlossaryRow, Meta, ReviewRow, Stats, TermOpinion, TermStatus, Verdict } from "./wire.ts";
 
 const WHO_KEY = "translate-audit.who";
 
@@ -71,5 +71,8 @@ export const api = {
     post<{ term: GlossaryRow; stats: Stats }>("glossary", input),
 
   check: (input: { entryId: string; lang: string; text: string }) => post<EditCheck>("check", input),
+  /** `semantic: false` asks only for the half that is a fact, which is free and keyless. */
+  consistency: (input: { source: string; lang: string; text: string; note?: string; semantic?: boolean }) =>
+    post<Consistency>("consistency", input),
   askAbout: (key: string) => post<TermOpinion>(`arbitrate/${encodeURIComponent(key)}`, {}),
 };

@@ -70,7 +70,12 @@ export type GlossaryEntry = {
   severity: number | null;
   variants: Variant[];
   entryIds: string[];
-  origin: TermConflict["origin"] | "spacing-or-case";
+  /**
+   * How the term came to be known. `human` is a term a translator typed, which no mining
+   * ever proposed — it used to be recorded as `duplicate-source`, which was a guess the
+   * workbook then printed as fact.
+   */
+  origin: TermConflict["origin"] | "spacing-or-case" | "human";
 };
 
 export type Action = "keep" | "auto-fix" | "needs human" | "needs source fix";

@@ -5,7 +5,11 @@ const pct = (n: number, d: number) => (d === 0 ? "0%" : `${Math.round((100 * n) 
 
 export function Summary({ meta, stats }: { meta: Meta; stats: Stats }) {
   const s = stats.summary;
-  const requests = meta.stages.reduce((n, x) => n + x.requests, 0);
+  // What was sent, not what was asked about: a reused judgment made no request. A run over
+  // a filled evidence store would otherwise report thousands of requests nobody made.
+  const attempted = meta.stages.reduce((n, x) => n + x.requests, 0);
+  const reused = meta.stages.reduce((n, x) => n + (x.reused ?? 0), 0);
+  const requests = attempted - reused;
   const judgments = meta.stages.reduce((n, x) => n + x.judgments, 0);
   const wallMs = meta.stages.reduce((n, x) => n + x.wallMs, 0);
   const errors = meta.stages.reduce((n, x) => n + x.errors, 0);
@@ -135,7 +139,8 @@ export function Summary({ meta, stats }: { meta: Meta; stats: Stats }) {
         <h3>The run these judgments came from</h3>
         <div className="big">{judgments.toLocaleString()}</div>
         <div className="dim">
-          judgments · {requests.toLocaleString()} requests · {(wallMs / 1000).toFixed(0)} s · {errors} errors
+          judgments · {requests.toLocaleString()} requests
+          {reused > 0 ? ` · ${reused.toLocaleString()} reused` : ""} · {(wallMs / 1000).toFixed(0)} s · {errors} errors
         </div>
         <div className="dim" style={{ marginTop: 6 }}>
           One LLM call per judgment at 3 s would be {((judgments * 3) / 3600).toFixed(1)} hours.
@@ -146,7 +151,8 @@ export function Summary({ meta, stats }: { meta: Meta; stats: Stats }) {
               <tr key={st.name}>
                 <td>{st.name}</td>
                 <td>
-                  {st.requests.toLocaleString()} req · {(st.wallMs / 1000).toFixed(1)} s
+                  {(st.requests - (st.reused ?? 0)).toLocaleString()} req
+                  {st.reused ? ` · ${st.reused.toLocaleString()} reused` : ""} · {(st.wallMs / 1000).toFixed(1)} s
                 </td>
               </tr>
             ))}

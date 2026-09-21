@@ -1,15 +1,17 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GlossaryEntry, TermConflict, Variant } from "../src/types.ts";
 import {
   applyArbitration,
+  asGlossaryEntries,
   decide,
   enforceable,
   glossaryStats,
   guidanceByTerm,
   isDecided,
+  isEnforceable,
   loadGlossary,
   manualTerm,
   mergeMined,
@@ -120,9 +122,24 @@ describe("deciding", () => {
     expect(isDecided(r.status)).toBe(true);
   });
 
-  it("context-dependent and rejected clear the canonical", () => {
-    expect(decide(base(), { status: "context-dependent" }, "b").canonical).toBeNull();
-    expect(decide(base(), { status: "rejected" }, "b").canonical).toBeNull();
+  it("suspending a term stops it being enforced without destroying what was proposed", () => {
+    for (const status of ["context-dependent", "rejected"] as const) {
+      const r = decide({ ...base(), canonical: "Tor" }, { status }, "b");
+      expect(r.canonical).toBe("Tor");
+      expect(isEnforceable(r)).toBe(false);
+    }
+  });
+
+  it("putting the status back is an undo, not a re-arbitration", () => {
+    // TESTING.md §5: mark a term context-dependent and its adherence findings go; restore
+    // it and they come back. They only come back if the canonical survived the round trip.
+    const decided = { ...base(), canonical: "Tor" };
+    const suspended = decide(decided, { status: "context-dependent" }, "b");
+    const restored = decide(suspended, { status: "proposed" }, "b");
+
+    expect(restored.canonical).toBe("Tor");
+    expect(isEnforceable(restored)).toBe(true);
+    expect(enforceable([restored]).map((g) => g.canonical)).toEqual(["Tor"]);
   });
 
   it("do-not-translate pins the source spelling", () => {
@@ -165,6 +182,69 @@ describe("what the audit is allowed to enforce", () => {
   });
 });
 
+describe("one shape, projected", () => {
+  /**
+   * `GlossaryRecord` and `GlossaryEntry` used to be two shapes of one thing, converted by
+   * hand in both directions. Both directions lost something: `interchangeable` was paid
+   * for and discarded on every pass, and `origin` was guessed back from `source` — so the
+   * workbook's "Found by" column reported a mined origin for a term a human had typed.
+   * The record now *is* an entry plus what a human settled, and the view is a pick.
+   */
+  const entryFields: (keyof GlossaryEntry)[] = [
+    "term", "lang", "canonical", "confidence", "interchangeable",
+    "doNotTranslate", "covered", "severity", "variants", "entryIds", "origin",
+  ];
+
+  const arbitrated = (): GlossaryRecord =>
+    applyArbitration(
+      mergeMined([], [conflict("usun", "de", [v("Löschen", 9), v("Entfernen", 2)])], [], display).records,
+      [answer("usun", "de", "Löschen")],
+    )[0];
+
+  it("copies every field it carries and invents none", () => {
+    const rec = arbitrated();
+    const projected = enforceable([rec])[0] as unknown as Record<string, unknown>;
+    expect(Object.keys(projected).sort()).toEqual([...entryFields].sort());
+    for (const f of entryFields) {
+      expect(projected[f]).toEqual((rec as unknown as Record<string, unknown>)[f]);
+    }
+  });
+
+  it("keeps the answer the workbook is the only reader of", () => {
+    // ~870 arbitrations a cold run pays for carry this. It reached the record as `null`
+    // for as long as the conversion rebuilt the entry field by field.
+    expect(arbitrated().interchangeable).toBe(0.5);
+    expect(enforceable([arbitrated()])[0].interchangeable).toBe(0.5);
+  });
+
+  it("records how a term was found rather than deriving it from who proposed it", () => {
+    expect(manualTerm("Wyślij", "de", "Senden", "b").origin).toBe("human");
+    expect(enforceable([manualTerm("Wyślij", "de", "Senden", "b")])[0].origin).toBe("human");
+
+    const codeResolved = mergeMined([], [], [{ ...answer("vat", "cs", "DPH (%)"), origin: "spacing-or-case", interchangeable: 1 }], display);
+    expect(codeResolved.records[0].origin).toBe("spacing-or-case");
+    expect(codeResolved.records[0].interchangeable).toBe(1);
+
+    const short = mergeMined([], [{ ...conflict("ok", "de", [v("OK", 3)]), origin: "short-key-term" }], [], display);
+    expect(short.records[0].origin).toBe("short-key-term");
+  });
+
+  it("holds what a do-not-translate decision means, so the view stays a pick", () => {
+    const rec = decide({ ...arbitrated(), display: "GARDIA" }, { status: "do-not-translate" }, "b");
+    expect(rec.doNotTranslate).toBe(1);
+    expect(rec.canonical).toBe("GARDIA");
+    expect(enforceable([rec])[0].doNotTranslate).toBe(1);
+  });
+
+  it("shows every term to the workbook and only the enforceable ones to the audit", () => {
+    const records = [arbitrated(), decide(arbitrated(), { status: "context-dependent" }, "b")];
+    expect(asGlossaryEntries(records)).toHaveLength(2);
+    expect(enforceable(records)).toHaveLength(1);
+    // and the suspended one is reported with everything still on it
+    expect(asGlossaryEntries(records)[1].canonical).toBe("Löschen");
+  });
+});
+
 describe("persistence", () => {
   it("survives a save and load", () => {
     const path = join(dir, "g.json");
@@ -176,6 +256,23 @@ describe("persistence", () => {
 
   it("returns an empty glossary rather than failing when there is none", () => {
     expect(loadGlossary(join(dir, "missing.json"))).toEqual([]);
+  });
+
+  it("reads a version 1 file, and says in one place what it cannot know", () => {
+    const path = join(dir, "v1.json");
+    const rec = manualTerm("Wyślij", "de", "Senden", "b");
+    saveGlossary(path, [rec]);
+    const raw = JSON.parse(readFileSync(path, "utf8")) as { version: number; terms: Record<string, unknown>[] };
+    raw.version = 1;
+    delete raw.terms[0].origin;
+    delete raw.terms[0].interchangeable;
+    writeFileSync(path, JSON.stringify(raw));
+
+    const back = loadGlossary(path);
+    expect(back[0].interchangeable).toBeNull(); // not known, and not faked as a number
+    expect(back[0].origin).toBe("human"); // the only field it can be recovered from
+    saveGlossary(path, back);
+    expect(JSON.parse(readFileSync(path, "utf8")).version).toBe(2);
   });
 
   it("refuses a file written by a different version", () => {

@@ -275,6 +275,43 @@ describe("substitutions", () => {
     const unsure = [{ ...glossary[0], confidence: 0.3 }];
     expect(proposeSubstitutions([finding("Entfernen")], unsure)).toHaveLength(0);
   });
+
+  describe("when several terms apply to one string", () => {
+    // Two terms, both present in the same translation. Every proposal carries a reference
+    // to the same Finding, so more than one of them means whichever request came back last
+    // decides the row's suggestion, its action and its verdict.
+    const two: GlossaryEntry[] = [
+      { ...glossary[0], term: "usun", canonical: "Löschen", severity: 1.5,
+        variants: [{ text: "Löschen", count: 9, examples: [] }, { text: "Entfernen", count: 2, examples: [] }] },
+      { ...glossary[0], term: "zamowienie", canonical: "Auftrag", severity: 2.5,
+        variants: [{ text: "Auftrag", count: 9, examples: [] }, { text: "Bestellung", count: 2, examples: [] }] },
+    ];
+    const both = () => ({ ...finding("Entfernen Bestellung"), source: "Usuń zamowienie" });
+
+    it("makes exactly one proposal, so no two of them can race for the same row", () => {
+      expect(proposeSubstitutions([both()], two)).toHaveLength(1);
+    });
+
+    it("picks the same one every time, whatever order the glossary arrived in", () => {
+      const forwards = proposeSubstitutions([both()], two)[0];
+      const backwards = proposeSubstitutions([both()], [...two].reverse())[0];
+
+      expect(forwards.from).toBe(backwards.from);
+      expect(forwards.after).toBe(backwards.after);
+    });
+
+    it("fixes the most damaging term first", () => {
+      // severity 2.5 beats 1.5, and the reviewer still sees the other one: the finding's
+      // `canonical-not-used` reason names every term that applies.
+      expect(proposeSubstitutions([both()], two)[0].from).toBe("Bestellung");
+    });
+
+    it("verifies a string that actually exists — never one edit stacked on another", () => {
+      const [p] = proposeSubstitutions([both()], two);
+      expect(p.after).toBe("Entfernen Auftrag");
+      expect(p.before).toBe("Entfernen Bestellung");
+    });
+  });
 });
 
 describe("synthetic corpus", () => {

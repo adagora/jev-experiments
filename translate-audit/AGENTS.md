@@ -82,7 +82,7 @@ These hold today. Preserve them in any change.
 | `ledger [--diff a b]` | nothing | nothing | what previous runs measured, and what a change did to the numbers |
 | `run --dry-run` | nothing | nothing | check a corpus is wired up; see the contested terms |
 | `report <run.json>` | nothing | the workbook | change a threshold, filter, re-render |
-| `review <run.json>` | ~1 request per edit typed | glossary, decisions | hand it to a translator |
+| `review <run.json>` | ~1 request per edit typed | glossary, decisions | hand it to a translator; its *Check a string* panel and `POST /api/consistency` check a string being written against the current glossary — free and keyless for the glossary half, and `"semantic": false` asks for that half alone |
 | `apply <audit.xlsx>` | nothing | re-import CSV | turn signed-off rows into a TMS import |
 | `probe` | ~$0.10 | nothing | verify an endpoint before trusting a glossary from it |
 | `score --synthetic N` | ~$0.55 at N=400 | nothing | measure precision, recall and calibration |
@@ -117,6 +117,13 @@ requests, and blind to meaning errors in strings that look clean), `--no-fix`.
 inputs makes no requests, an interrupted run resumes by itself, and changing one question
 re-asks only the units that ask it. Iterating on question wording costs the delta, not $11.89.
 `--no-cache` forces everything afresh.
+
+`cost.requests` is what was **sent**, and a unit answered from the store is in `cost.reused`
+instead — so a warm run reads `0 requests · 6,968 reused · $0.00`, and `jq .cost.requests`
+is a number you can act on rather than a count of work nobody did. The per-stage table keeps
+both: its `requests` column is units attempted, its `reused` column how many were free.
+Proven across a process boundary by `test/warm.test.ts`, which is where it would fail
+silently: a state field that varies per process makes every judgment a miss.
 
 ## What you want → what to run
 
@@ -183,15 +190,13 @@ Verified in this tree. Each is a thing that returns a well-formed answer while b
 | Edge | Consequence |
 |---|---|
 | runs saved before stage 1 carry no provenance | `audit.run.json` here has 5 arbitration judgments per request where this build asks 6. `report` now says so — new runs record `provenance.questions`, and a mismatch with this build is printed |
-| `interchangeable` and `sourceAmbiguous` are asked of every arbitration and read by nothing | ~1,740 paid judgments discarded on a cold 870-term run (~$0.09). The waste is small; the category is not. Removing them changes what is asked, so it needs a `probe` and a re-`score` with the old seed — not a silent edit |
-| `proposeSubstitutions` can emit several proposals for one finding, and each overwrites `finding.suggested` as it completes | 1,040 substitution requests stored 1,019 suggestions. Which of two verified fixes survives depends on lane completion order, so a run is not reproducible from its inputs |
-| `autoFixMaxSeverity` is declared, defaulted and tested, and read by nothing | a policy knob that does nothing |
+| `sourceAmbiguous` is asked of every arbitration and read by nothing | ~870 paid judgments discarded on a cold run (~$0.045). The waste is small; the category is not. Removing it changes the questions, hence the fingerprint, hence every cached judgment — so it needs a `probe` and a re-`score` with the old seed, not a silent edit. `interchangeable` was in this class until stage 14 and no longer is: the record stores it and the workbook's Glossary sheet shows it |
 
 ## After you change something
 
 | Changed | Run |
 |---|---|
-| `util/text.ts`, `lint.ts`, `mine.ts`, `compose.ts`, `report/` | `npm test` — 210 tests, ~3 s, no key needed |
+| `util/text.ts`, `lint.ts`, `mine.ts`, `compose.ts`, `report/` | `npm test` — 246 tests, ~2 s, no key needed |
 | a question in `jev/questions.ts` | `npm test`, then `probe`, then `score` with the seed you used before |
 | a threshold in `compose.ts` | `report <run.json>` with the old and new values and compare counts. Re-running `run` to see a report change means the cache is not being used |
 | anything touching the workbook columns | `npm test` — `roundtrip.test.ts` exists because `apply` reads the Decision column back **by position** |
